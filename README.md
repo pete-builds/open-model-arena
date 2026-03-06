@@ -80,13 +80,14 @@ The model registry is a YAML file that defines providers and models. See `models
 providers:
   my-gateway:
     base_url: "https://your-api-gateway.com/v1"
-    api_key_env: "YOUR_API_KEY"    # reads from environment
+    api_key_env: "GATEWAY_API_KEY"  # reads from environment
     timeout: 30
 
   local-ollama:
     base_url: "http://localhost:11434/v1"
     api_key: "ollama"
     timeout: 120
+    local: true                     # prevents pairing two local models
 
 models:
   - id: gpt-4o
