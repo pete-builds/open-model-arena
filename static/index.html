@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Model Arena</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Source+Sans+3:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.9/purify.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <nav class="top-nav-left">
+            <a href="/" id="nav-new-battle" class="hidden">&#8592; new battle</a>
+        </nav>
+        <nav class="top-nav">
+            <a href="/" id="nav-arena" class="active">arena</a>
+            <a href="/leaderboard" id="nav-leaderboard">leaderboard</a>
+            <button class="theme-toggle" id="theme-toggle" title="toggle theme"></button>
+        </nav>
+
+        <!-- ARENA VIEW (create battle) -->
+        <div id="arena-view" class="arena-centered">
+            <div class="hero">
+                <h1 class="logo">MODEL ARENA</h1>
+                <p class="hero-tagline">Put the models to the <span class="highlight">test</span></p>
+            </div>
+
+            <div class="prompt-card">
+                <textarea id="prompt" placeholder="Ask anything..." spellcheck="false"></textarea>
+            </div>
+
+            <div class="toolbar-bar">
+                <div class="toolbar-row">
+                    <div class="btn-group desktop-only" id="category-group">
+                        <button class="btn-option active" data-value="general">general</button>
+                        <button class="btn-option" data-value="coding">coding</button>
+                        <button class="btn-option" data-value="reasoning">reasoning</button>
+                        <button class="btn-option" data-value="creative">creative</button>
+                    </div>
+                    <select id="category-mobile" class="model-select mobile-only">
+                        <option value="general">general</option>
+                        <option value="coding">coding</option>
+                        <option value="reasoning">reasoning</option>
+                        <option value="creative">creative</option>
+                    </select>
+                    <select id="select-model-a" class="model-select"><option value="">mystery match</option></select>
+                    <span class="vs-label">vs</span>
+                    <select id="select-model-b" class="model-select"><option value="">mystery match</option></select>
+                </div>
+                <div class="toolbar-actions">
+                    <button class="btn-link" id="save-template-btn" title="save as template">+ template</button>
+                    <button id="battle-btn" class="btn-battle">
+                        <span class="btn-text">BATTLE &rarr;</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="template-bar" id="template-bar">
+                <select id="template-select">
+                    <option value="">load template...</option>
+                </select>
+                <button class="btn-icon btn-danger" id="delete-template-btn" title="delete selected template">DEL</button>
+            </div>
+
+            <div class="stats-inline" id="stats-bar">
+                <span><span class="stat-value" id="stat-battles">-</span> battles</span>
+                <span class="dot">&middot;</span>
+                <span><span class="stat-value" id="stat-voted">-</span> voted</span>
+                <span class="dot">&middot;</span>
+                <span><span class="stat-value" id="stat-today">-</span> today</span>
+            </div>
+        </div>
+
+        <!-- BATTLE VIEW (streaming) -->
+        <div id="battle-view" class="hidden">
+            <div class="prompt-display" id="battle-prompt"></div>
+            <div class="battle-panels">
+                <div class="panel side-a">
+                    <div class="panel-header">
+                        Model A <span class="streaming-indicator" id="status-a"></span>
+                    </div>
+                    <div class="panel-body" id="output-a"></div>
+                    <div class="panel-footer" id="footer-a"></div>
+                </div>
+                <div class="panel side-b">
+                    <div class="panel-header">
+                        Model B <span class="streaming-indicator" id="status-b"></span>
+                    </div>
+                    <div class="panel-body" id="output-b"></div>
+                    <div class="panel-footer" id="footer-b"></div>
+                </div>
+            </div>
+
+            <div class="vote-section hidden" id="vote-section">
+                <button class="vote-btn vote-a" data-vote="a">A WINS</button>
+                <button class="vote-btn vote-tie" data-vote="tie">TIE</button>
+                <button class="vote-btn vote-b" data-vote="b">B WINS</button>
+            </div>
+            <div class="skip-section hidden" id="skip-section">
+                <button class="btn-link" id="skip-btn">skip (don't vote)</button>
+            </div>
+        </div>
+
+        <!-- REVEAL VIEW -->
+        <div id="reveal-view" class="hidden">
+            <div class="prompt-display" id="reveal-prompt"></div>
+            <div class="battle-panels">
+                <div class="panel side-a">
+                    <div class="panel-header">Model A</div>
+                    <div class="reveal-name" id="reveal-name-a"></div>
+                    <div class="reveal-meta" id="reveal-meta-a"></div>
+                    <div class="panel-body" id="reveal-output-a"></div>
+                    <div class="panel-footer" id="reveal-footer-a"></div>
+                </div>
+                <div class="panel side-b">
+                    <div class="panel-header">Model B</div>
+                    <div class="reveal-name" id="reveal-name-b"></div>
+                    <div class="reveal-meta" id="reveal-meta-b"></div>
+                    <div class="panel-body" id="reveal-output-b"></div>
+                    <div class="panel-footer" id="reveal-footer-b"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LEADERBOARD VIEW -->
+        <div id="leaderboard-view" class="hidden">
+            <p class="lb-disclaimer">Rankings reflect informal, subjective preferences from a small number of evaluators. This is not a scientific benchmark and should not be used to draw conclusions about overall model quality.</p>
+            <div class="controls">
+                <div class="control-group">
+                    <label>category</label>
+                    <div class="btn-group desktop-only" id="lb-category-group">
+                        <button class="btn-option active" data-value="overall">overall</button>
+                        <button class="btn-option" data-value="general">general</button>
+                        <button class="btn-option" data-value="coding">coding</button>
+                        <button class="btn-option" data-value="reasoning">reasoning</button>
+                        <button class="btn-option" data-value="creative">creative</button>
+                    </div>
+                    <select id="lb-category-mobile" class="model-select mobile-only">
+                        <option value="overall">overall</option>
+                        <option value="general">general</option>
+                        <option value="coding">coding</option>
+                        <option value="reasoning">reasoning</option>
+                        <option value="creative">creative</option>
+                    </select>
+                </div>
+            </div>
+            <table class="leaderboard-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>model</th>
+                        <th>provider</th>
+                        <th>elo</th>
+                        <th>elo bar</th>
+                        <th>w/l/t</th>
+                        <th>win %</th>
+                        <th>avg time</th>
+                    </tr>
+                </thead>
+                <tbody id="lb-body"></tbody>
+            </table>
+            <p id="lb-empty" class="hidden" style="text-align:center; color:var(--text-dim); padding:2rem;">no battles yet. go fight some models.</p>
+            <div class="export-bar">
+                <button class="btn-secondary" id="export-csv">EXPORT CSV</button>
+                <button class="btn-secondary" id="export-json">EXPORT JSON</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="/js/app.js"></script>
+</body>
+</html>

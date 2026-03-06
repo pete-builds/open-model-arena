@@ -1,0 +1,8 @@
+data/
+__pycache__/
+*.pyc
+.env
+models.yaml
+TEAMS-MESSAGE.md
+PROJECT-SUMMARY.md
+private/

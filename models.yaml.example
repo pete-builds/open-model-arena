@@ -1,0 +1,77 @@
+# Model Arena — Example Configuration
+#
+# Copy this file to models.yaml and edit with your own providers and models.
+# Any OpenAI-compatible API endpoint works (OpenAI, Anthropic via LiteLLM, Ollama, etc.)
+
+providers:
+  # Example: OpenAI direct
+  openai:
+    base_url: "https://api.openai.com/v1"
+    api_key_env: "OPENAI_API_KEY"       # reads from environment variable
+    request_surcharge: 0.0
+    timeout: 30
+
+  # Example: Local Ollama
+  ollama:
+    base_url: "http://localhost:11434/v1"
+    api_key: "ollama"                    # Ollama accepts any string
+    request_surcharge: 0.0
+    timeout: 120                         # local models can be slower
+
+  # Example: LiteLLM proxy / custom gateway
+  # gateway:
+  #   base_url: "https://your-litellm-proxy.com/v1"
+  #   api_key_env: "GATEWAY_API_KEY"
+  #   request_surcharge: 0.002
+  #   timeout: 30
+
+models:
+  # --- Cloud models (via OpenAI or gateway) ---
+
+  - id: gpt-4o
+    provider: openai
+    display_name: "GPT-4o"
+    model_id: "gpt-4o"
+    input_cost_per_1m: 2.50
+    output_cost_per_1m: 10.0
+    categories: [general, coding, reasoning, creative]
+    enabled: true
+
+  - id: gpt-4o-mini
+    provider: openai
+    display_name: "GPT-4o Mini"
+    model_id: "gpt-4o-mini"
+    input_cost_per_1m: 0.15
+    output_cost_per_1m: 0.60
+    categories: [general, coding, creative]
+    enabled: true
+
+  # --- Local models (via Ollama) ---
+
+  - id: llama3-8b
+    provider: ollama
+    display_name: "Llama 3 8B (Local)"
+    model_id: "llama3:8b"
+    input_cost_per_1m: 0.0
+    output_cost_per_1m: 0.0
+    categories: [general, coding, reasoning]
+    enabled: true
+
+  - id: mistral-7b
+    provider: ollama
+    display_name: "Mistral 7B (Local)"
+    model_id: "mistral:7b"
+    input_cost_per_1m: 0.0
+    output_cost_per_1m: 0.0
+    categories: [general, creative]
+    enabled: true
+
+  # --- Disabled example ---
+  # - id: claude-3-sonnet
+  #   provider: gateway
+  #   display_name: "Claude 3 Sonnet"
+  #   model_id: "claude-3-sonnet-20240229"
+  #   input_cost_per_1m: 3.0
+  #   output_cost_per_1m: 15.0
+  #   categories: [general, coding, reasoning, creative]
+  #   enabled: false

@@ -1,0 +1,12 @@
+services:
+  model-arena:
+    build: .
+    container_name: model-arena
+    restart: unless-stopped
+    ports:
+      - "3694:3694"
+    volumes:
+      - ./data:/app/data
+      - ./models.yaml:/app/models.yaml:ro
+    environment:
+      - GATEWAY_API_KEY=${GATEWAY_API_KEY}
