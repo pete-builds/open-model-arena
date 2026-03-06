@@ -10,12 +10,20 @@ Inspired by [Chatbot Arena](https://lmarena.ai/) (LMSYS), built for teams who wa
 
 ## Why Model Arena?
 
-- **Blind comparison** — Models are hidden until after you vote, so the response speaks for itself
-- **Targeted comparison** — Skip the mystery match and pick two specific models to go head to head
-- **Your models, your prompts** — Connect any OpenAI-compatible API (OpenAI, Anthropic via proxy, Ollama, LiteLLM, etc.)
-- **One command deploy** — `docker compose up` and you're running
-- **YAML config** — Add or swap models without touching code
-- **Minimal footprint** — FastAPI + SQLite + vanilla JS, no build step
+If you're working with multiple models, you're often asking questions like:
+
+- Is this local model good enough, or should I call an API model instead?
+- Which local model actually performs better for my prompts?
+- Is a cheaper model close enough to replace a more expensive one?
+
+Model Arena makes it easy to run blind comparisons across:
+
+- **Local models** (Ollama, vLLM, LiteLLM gateways)
+- **API models** (OpenAI, Anthropic, Gemini, etc.)
+- **Local vs API models**
+- **Different versions or quantizations of the same model**
+
+Send the same prompt to two models, vote on the better response without seeing which model produced it, and track results over time with an ELO leaderboard.
 
 ## Features
 
