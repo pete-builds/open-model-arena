@@ -4,6 +4,12 @@ A self-hosted tool for comparing AI models side-by-side. Two models respond to t
 
 Inspired by [Chatbot Arena](https://lmarena.ai/) (LMSYS), built for teams who want to run private evaluations on their own infrastructure.
 
+## Screenshots
+
+![Arena](docs/screenshots/battle.png)
+![Reveal](docs/screenshots/reveal.png)
+![Leaderboard](docs/screenshots/leaderboard.png)
+
 ## Why Model Arena?
 
 - **Blind comparison** — Models are hidden until after you vote, so the response speaks for itself
