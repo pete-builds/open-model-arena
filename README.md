@@ -6,9 +6,7 @@ Inspired by [Chatbot Arena](https://lmarena.ai/) (LMSYS), built for teams who wa
 
 ## Screenshots
 
-![Arena](docs/screenshots/battle.png)
-![Reveal](docs/screenshots/reveal.png)
-![Leaderboard](docs/screenshots/leaderboard.png)
+![Arena](docs/screenshots/arena.png)
 
 ## Why Model Arena?
 
