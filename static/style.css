@@ -785,12 +785,22 @@ body {
 .site-footer {
     text-align: center;
     padding: 2rem 1rem 1rem;
+}
+.footer-main {
     font-size: 0.75rem;
     color: var(--text-dim);
     opacity: 0.5;
     transition: opacity 0.2s;
 }
-.site-footer:hover { opacity: 0.8; }
+.footer-main:hover { opacity: 0.8; }
+.footer-attr {
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    opacity: 0.3;
+    margin-top: 0.3rem;
+    transition: opacity 0.2s;
+}
+.footer-attr:hover { opacity: 0.6; }
 .site-footer a {
     color: var(--text-dim);
     text-decoration: none;
