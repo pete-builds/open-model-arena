@@ -141,7 +141,7 @@ body {
 
 .hero-tagline {
     font-family: var(--serif);
-    font-size: 1.6rem;
+    font-size: 2.4rem;
     font-weight: 400;
     color: var(--text);
     margin-top: 0.8rem;
@@ -794,7 +794,7 @@ body {
 
     /* Hero */
     .logo { font-size: 1rem; }
-    .hero-tagline { font-size: 1rem; }
+    .hero-tagline { font-size: 1.4rem; }
     .hero { margin-bottom: 1.5rem; }
     .arena-centered { min-height: auto; padding-top: 1rem; }
 
