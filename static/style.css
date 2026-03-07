@@ -779,6 +779,22 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
+/* Footer */
+.site-footer {
+    text-align: center;
+    padding: 2rem 1rem 1rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    opacity: 0.5;
+    transition: opacity 0.2s;
+}
+.site-footer:hover { opacity: 0.8; }
+.site-footer a {
+    color: var(--text-dim);
+    text-decoration: none;
+}
+.site-footer a:hover { color: var(--text); }
+
 /* Mobile/Desktop toggle */
 .mobile-only { display: none; }
 
