@@ -1,5 +1,7 @@
 # Open Model Arena
 
+> Compare local and cloud models in a self-hosted arena using blind voting and ELO rankings.
+
 **Bring your own models. Run blind battles.**
 
 Run blind side-by-side comparisons across any combination of AI models on your own infrastructure. Cloud APIs, local models, internal gateways -- whatever speaks OpenAI-compatible. You pick the prompts. You own the data. ELO rankings track which models actually perform for your use cases.
