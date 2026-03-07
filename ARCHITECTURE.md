@@ -1,4 +1,4 @@
-# Model Arena — Architecture Guide
+# Open Model Arena — Architecture Guide
 
 How the app works, end to end. Written so you can walk someone through it confidently.
 

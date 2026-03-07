@@ -1,4 +1,4 @@
-# Model Arena — Example Configuration
+# Open Model Arena — Example Configuration
 #
 # Copy this file to models.yaml and edit with your own providers and models.
 # Any OpenAI-compatible API endpoint works (OpenAI, Anthropic via LiteLLM, Ollama, etc.)

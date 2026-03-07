@@ -1,54 +1,53 @@
-# Model Arena
+# Open Model Arena
 
-A self-hosted tool for comparing AI models side-by-side. Two models respond to the same prompt simultaneously, and you vote on which response you prefer without knowing which model produced it. An ELO rating system tracks results over time.
+**Bring your own models. Run blind battles.**
 
-Inspired by [Chatbot Arena](https://lmarena.ai/) (LMSYS), built for teams who want to run private evaluations on their own infrastructure.
+Run blind side-by-side comparisons across any combination of AI models on your own infrastructure. Cloud APIs, local models, internal gateways -- whatever speaks OpenAI-compatible. You pick the prompts. You own the data. ELO rankings track which models actually perform for your use cases.
+
+## How is this different?
+
+Public model leaderboards test their models with their prompts on their infrastructure. You get rankings, but they don't reflect how models perform on *your* workloads, with *your* data, through *your* API setup.
+
+Open Model Arena flips that. You bring the models, you write the prompts, and the blind evaluation removes the bias of knowing which model you're reading. It runs on your hardware, behind your firewall, with your API keys.
+
+- Connect **any OpenAI-compatible endpoint**: OpenAI, Anthropic (via proxy), Google, Ollama, LM Studio, vLLM, LiteLLM, or your org's internal gateway
+- Run it on a **Raspberry Pi, a NAS, a VM, or a cloud instance** -- it's FastAPI + SQLite, not a distributed system
+- **No data leaves your network** unless you're calling cloud APIs
+- **YAML config** -- add or swap models without touching code
 
 ## Screenshots
 
 ![Arena](docs/screenshots/arena.png)
 
-## Why Model Arena?
-
-If you're working with multiple models, you're often asking questions like:
-
-- Is this local model good enough, or should I call an API model instead?
-- Which local model actually performs better for my prompts?
-- Is a cheaper model close enough to replace a more expensive one?
-
-Model Arena makes it easy to run blind comparisons across:
-
-- **Local models** (Ollama, vLLM, LiteLLM gateways)
-- **API models** (OpenAI, Anthropic, Gemini, etc.)
-- **Local vs API models**
-- **Different versions or quantizations of the same model**
-
-Send the same prompt to two models, vote on the better response without seeing which model produced it, and track results over time with an ELO leaderboard.
-
 ## Features
 
-- **Real-time streaming** — Both responses stream simultaneously via Server-Sent Events
-- **ELO leaderboard** — Standard ELO rating system (K=32), filterable by category
-- **Category support** — General, coding, reasoning, creative
-- **Cost tracking** — Per-response cost estimates based on model pricing config
-- **Vote audit log** — Full history with before/after ELO for every vote
-- **Markdown rendering** — Responses rendered with syntax highlighting
-- **Prompt templates** — Save and reuse prompts from localStorage
-- **Battle export** — Download battle history as CSV or JSON
+- **Blind comparison** -- models are hidden until after you vote
+- **Targeted comparison** -- pick two specific models to go head-to-head
+- **Real-time streaming** -- both responses stream simultaneously via Server-Sent Events
+- **ELO leaderboard** -- standard ELO rating system (K=32), filterable by category
+- **Category support** -- general, coding, reasoning, creative
+- **Cost tracking** -- per-response cost estimates based on model pricing config
+- **Vote audit log** -- full history with before/after ELO for every vote
+- **Markdown rendering** -- responses rendered with syntax highlighting
+- **Prompt templates** -- save and reuse prompts from localStorage
+- **Battle export** -- download battle history as CSV or JSON
+- **Dark/light theme** -- toggle persists across sessions
 
 ## How It Works
 
 1. Enter a prompt and select a category
 2. Two models are randomly selected (configurable rules prevent unfair pairings)
 3. Both models receive the prompt and stream responses side-by-side
-4. Vote: "A Wins", "Tie", or "B Wins"
+4. Vote: **A Wins**, **Tie**, or **B Wins**
 5. Models are revealed with latency, token count, cost, and ELO change
 6. Leaderboard tracks cumulative performance
 
 ## Quick Start
 
 ```bash
-# Copy the example configs
+# Clone and configure
+git clone https://github.com/pete-builds/open-model-arena.git
+cd open-model-arena
 cp models.yaml.example models.yaml
 cp .env.example .env
 
@@ -57,7 +56,7 @@ cp .env.example .env
 #   ARENA_PASSPHRASE=your-secret-phrase
 #   AUTH_TOKEN_SECRET=$(openssl rand -hex 32)
 
-# Then start:
+# Start
 docker compose up -d
 ```
 
@@ -123,24 +122,25 @@ models:
 
 ## Tech Stack
 
-- **Backend:** Python 3.12 / FastAPI
+- **Backend:** Python / FastAPI
 - **AI Client:** OpenAI SDK (works with any OpenAI-compatible API)
 - **Streaming:** Server-Sent Events (SSE)
-- **Database:** SQLite with WAL mode (aiosqlite)
-- **Frontend:** Vanilla JS + highlight.js + marked.js (CDN)
-- **Container:** Docker (python:3.12-slim)
+- **Database:** SQLite with WAL mode
+- **Frontend:** Vanilla JS + ES modules (no build step)
+- **Container:** Docker
 
 ## API
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/battle` | `{"prompt": "...", "category": "general"}` → `{"battle_id": "..."}` |
-| `GET` | `/api/battle/{id}/stream` | SSE stream with events: `model_a`, `model_b`, `model_a_done`, `model_b_done`, `battle_complete` |
-| `POST` | `/api/battle/{id}/vote` | `{"winner": "a\|b\|tie"}` → reveals models + ELO changes |
+| `POST` | `/api/battle` | `{"prompt": "...", "category": "general"}` |
+| `GET` | `/api/battle/{id}/stream` | SSE stream with model events |
+| `POST` | `/api/battle/{id}/vote` | `{"winner": "a\|b\|tie"}` |
 | `GET` | `/api/leaderboard?category=overall` | ELO rankings |
 | `GET` | `/api/stats` | Battle counts |
 | `GET` | `/api/models` | List enabled models |
-| `GET` | `/api/export?format=csv` | Download battle history (csv or json) |
+| `GET` | `/api/export?format=csv` | Download battle history |
+| `GET` | `/healthz` | Health check |
 
 ## ELO System
 
@@ -148,6 +148,11 @@ models:
 - K-factor: 32
 - Ratings tracked per-category and overall
 - Ties award 0.5 score to each model
+- Provisional threshold: minimum 5 battles before ranked
+
+## Prior Art
+
+Inspired by [Chatbot Arena](https://lmarena.ai/) (LMSYS), which pioneered blind model comparison at scale. Open Model Arena brings that concept to self-hosted infrastructure for teams and individuals who want to evaluate models privately.
 
 ## License
 

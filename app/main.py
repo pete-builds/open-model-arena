@@ -313,7 +313,7 @@ async def export_battles(format: str = "csv"):
     if format == "json":
         return JSONResponse(
             content=battles,
-            headers={"Content-Disposition": "attachment; filename=model-arena-export.json"},
+            headers={"Content-Disposition": "attachment; filename=open-model-arena-export.json"},
         )
 
     # CSV
@@ -329,7 +329,7 @@ async def export_battles(format: str = "csv"):
     return Response(
         content=output.getvalue(),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=model-arena-export.csv"},
+        headers={"Content-Disposition": "attachment; filename=open-model-arena-export.csv"},
     )
 
 

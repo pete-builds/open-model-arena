@@ -1,4 +1,4 @@
-// Model Arena — Main Entry Point
+// Open Model Arena — Main Entry Point
 
 import { $, $$, state } from './state.js';
 import { initTheme, toggleTheme } from './theme.js';

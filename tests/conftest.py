@@ -1,4 +1,4 @@
-"""Shared fixtures for Model Arena tests."""
+"""Shared fixtures for Open Model Arena tests."""
 
 import os
 import tempfile
