@@ -4,7 +4,7 @@
 
 **Bring your own models. Run blind battles.**
 
-![Arena](docs/screenshots/arena.png)
+![Arena](docs/screenshots/demo.gif)
 
 If you're running your own AI stack -- Ollama on a Mac Mini, models on a GPU server, llama.cpp on bare metal, vLLM in a container -- you've probably wondered how your local models actually compare to the cloud APIs you're paying for. Open Model Arena gives you a way to find out.
 
