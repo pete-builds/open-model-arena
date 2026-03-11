@@ -161,11 +161,21 @@ async def test_create_battle_same_model(client, auth_headers):
 @pytest.mark.asyncio
 async def test_vote_missing_battle(client, auth_headers):
     resp = await client.post(
-        "/api/battle/nonexistent/vote",
+        "/api/battle/abcdefghij123456/vote",
         json={"winner": "a"},
         headers=auth_headers,
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_vote_invalid_battle_id_format(client, auth_headers):
+    resp = await client.post(
+        "/api/battle/not-valid!/vote",
+        json={"winner": "a"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
