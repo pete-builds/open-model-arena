@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import random
 import time
 
@@ -114,7 +115,12 @@ async def stream_battle(config: Config, store, battle_id: str):
             await queues[side].put(("error", f"timed out after {timeout_s}s"))
             return
         except Exception as e:
-            await queues[side].put(("error", str(e)))
+            # Sanitize error: never forward raw exception text to the client,
+            # as it may contain internal URLs, API keys, or stack traces.
+            error_type = type(e).__name__
+            safe_msg = f"model call failed ({error_type})"
+            logging.getLogger("arena").warning("stream error side=%s model=%s: %s", side, model.id, e)
+            await queues[side].put(("error", safe_msg))
             return
 
         elapsed_ms = int((time.monotonic() - start) * 1000)

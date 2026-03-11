@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import io
 import os
+import re
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -130,6 +131,15 @@ async def healthz():
 
 # --- API Routes ---
 
+_BATTLE_ID_RE = re.compile(r"^[a-zA-Z0-9]{16}$")
+
+
+def _validate_battle_id(battle_id: str) -> None:
+    """Reject battle IDs that don't match the expected format."""
+    if not _BATTLE_ID_RE.match(battle_id):
+        raise HTTPException(400, "invalid battle ID format")
+
+
 def _get_client_ip(request: Request) -> str:
     """Extract real client IP from X-Forwarded-For (set by Tailscale Funnel), fall back to direct connection."""
     forwarded = request.headers.get("x-forwarded-for")
@@ -171,6 +181,7 @@ async def create_battle(req: BattleRequest, request: Request):
 
 @app.get("/api/battle/{battle_id}/stream")
 async def stream(battle_id: str):
+    _validate_battle_id(battle_id)
     battle = await store.get_battle(battle_id)
     if not battle:
         raise HTTPException(404, "battle not found")
@@ -188,6 +199,7 @@ async def stream(battle_id: str):
 
 @app.post("/api/battle/{battle_id}/vote")
 async def vote(battle_id: str, req: VoteRequest):
+    _validate_battle_id(battle_id)
     if req.winner not in ("a", "b", "tie"):
         raise HTTPException(400, "winner must be 'a', 'b', or 'tie'")
 
@@ -337,6 +349,7 @@ async def export_battles(format: str = "csv"):
 
 @app.get("/battle/{battle_id}")
 async def battle_page(battle_id: str):
+    _validate_battle_id(battle_id)
     return FileResponse("static/index.html")
 
 

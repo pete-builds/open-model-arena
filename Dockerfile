@@ -9,7 +9,12 @@ COPY app/ ./app/
 COPY static/ ./static/
 COPY models.yaml .
 
-RUN mkdir -p /app/data
+# Create non-root user and own the data directory
+RUN groupadd -r arena && useradd -r -g arena -d /app -s /sbin/nologin arena \
+    && mkdir -p /app/data \
+    && chown -R arena:arena /app/data
+
+USER arena
 
 EXPOSE 3694
 
