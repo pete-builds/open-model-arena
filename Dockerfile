@@ -1,15 +1,20 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
 
 COPY app/ ./app/
 COPY static/ ./static/
 COPY models.yaml .
 
-# Create non-root user and own the data directory
 RUN groupadd -r arena && useradd -r -g arena -d /app -s /sbin/nologin arena \
     && mkdir -p /app/data \
     && chown -R arena:arena /app/data
