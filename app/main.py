@@ -8,20 +8,18 @@ import os
 import re
 import secrets
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .config import load_config
-from .store import Store
 from .arena import select_models, stream_battle
+from .config import load_config
 from .models import BattleRequest, VoteRequest
 from .ratelimit import RateLimiter
-
+from .store import Store
 
 config = load_config()
 store = Store()

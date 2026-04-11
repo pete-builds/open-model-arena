@@ -1,18 +1,16 @@
 """API endpoint tests using FastAPI TestClient."""
 
-import hashlib
-import hmac
 import os
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 # These must be set before importing main
 os.environ.setdefault("ARENA_PASSPHRASE", "test-passphrase")
 os.environ.setdefault("AUTH_TOKEN_SECRET", "test-secret-key")
 
-from app.main import app, store, _make_token, ARENA_PASSPHRASE
+from app.main import ARENA_PASSPHRASE, _make_token, app, store
 
 
 def _auth_cookies() -> dict[str, str]:

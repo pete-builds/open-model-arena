@@ -6,3 +6,7 @@ models.yaml
 TEAMS-MESSAGE.md
 PROJECT-SUMMARY.md
 private/
+.venv/
+.coverage
+htmlcov/
+.pytest_cache/

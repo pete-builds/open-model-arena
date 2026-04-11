@@ -1,7 +1,6 @@
 """Shared fixtures for Open Model Arena tests."""
 
 import os
-import tempfile
 
 # Set required env vars BEFORE any app imports
 os.environ.setdefault("ARENA_PASSPHRASE", "test-passphrase")
@@ -10,7 +9,7 @@ os.environ.setdefault("AUTH_TOKEN_SECRET", "test-secret-key")
 import pytest
 import pytest_asyncio
 
-from app.config import Config, Provider, Model
+from app.config import Config, Model, Provider
 from app.store import Store
 
 

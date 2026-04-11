@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import secrets
 import string
-from datetime import datetime
 
 import aiosqlite
 
@@ -126,33 +125,19 @@ class Store:
             new_a, new_b = _update_elo(rating_a, rating_b, winner)
 
             # Update ratings
+            _update_sql = (
+                "UPDATE ratings SET rating = ?, {stat} = {stat} + 1,"
+                " updated_at = datetime('now') WHERE model_id = ? AND category = ?"
+            )
             if winner == "a":
-                await self.db.execute(
-                    "UPDATE ratings SET rating = ?, wins = wins + 1, updated_at = datetime('now') WHERE model_id = ? AND category = ?",
-                    (new_a, model_a, cat),
-                )
-                await self.db.execute(
-                    "UPDATE ratings SET rating = ?, losses = losses + 1, updated_at = datetime('now') WHERE model_id = ? AND category = ?",
-                    (new_b, model_b, cat),
-                )
+                await self.db.execute(_update_sql.format(stat="wins"), (new_a, model_a, cat))
+                await self.db.execute(_update_sql.format(stat="losses"), (new_b, model_b, cat))
             elif winner == "b":
-                await self.db.execute(
-                    "UPDATE ratings SET rating = ?, losses = losses + 1, updated_at = datetime('now') WHERE model_id = ? AND category = ?",
-                    (new_a, model_a, cat),
-                )
-                await self.db.execute(
-                    "UPDATE ratings SET rating = ?, wins = wins + 1, updated_at = datetime('now') WHERE model_id = ? AND category = ?",
-                    (new_b, model_b, cat),
-                )
+                await self.db.execute(_update_sql.format(stat="losses"), (new_a, model_a, cat))
+                await self.db.execute(_update_sql.format(stat="wins"), (new_b, model_b, cat))
             else:  # tie
-                await self.db.execute(
-                    "UPDATE ratings SET rating = ?, ties = ties + 1, updated_at = datetime('now') WHERE model_id = ? AND category = ?",
-                    (new_a, model_a, cat),
-                )
-                await self.db.execute(
-                    "UPDATE ratings SET rating = ?, ties = ties + 1, updated_at = datetime('now') WHERE model_id = ? AND category = ?",
-                    (new_b, model_b, cat),
-                )
+                await self.db.execute(_update_sql.format(stat="ties"), (new_a, model_a, cat))
+                await self.db.execute(_update_sql.format(stat="ties"), (new_b, model_b, cat))
 
             if cat == "overall":
                 results = {
@@ -164,8 +149,14 @@ class Store:
 
         # Log vote
         await self.db.execute(
-            "INSERT INTO vote_log (battle_id, model_a, model_b, winner, rating_a_before, rating_b_before, rating_a_after, rating_b_after) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (battle_id, model_a, model_b, winner, results["rating_a_before"], results["rating_b_before"], results["rating_a_after"], results["rating_b_after"]),
+            "INSERT INTO vote_log (battle_id, model_a, model_b, winner,"
+            " rating_a_before, rating_b_before, rating_a_after, rating_b_after)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                battle_id, model_a, model_b, winner,
+                results["rating_a_before"], results["rating_b_before"],
+                results["rating_a_after"], results["rating_b_after"],
+            ),
         )
 
         # Mark battle as voted

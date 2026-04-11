@@ -1,6 +1,6 @@
 """Tests for model selection logic."""
 
-from app.arena import select_models, estimate_cost
+from app.arena import estimate_cost, select_models
 
 
 def test_select_models_returns_two_different(test_config):

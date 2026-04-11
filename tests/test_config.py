@@ -1,6 +1,5 @@
 """Tests for config loading and model lookups."""
 
-from app.config import Config, Provider, Model
 
 
 def test_get_model(test_config):
