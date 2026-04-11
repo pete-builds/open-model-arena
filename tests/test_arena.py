@@ -41,10 +41,26 @@ def test_select_models_all_local_fallback():
         "local2": Provider(name="local2", base_url="http://l2/v1", api_key="", local=True),
     }
     models = [
-        Model(id="a", provider_name="local1", display_name="A", model_id="a",
-              input_cost_per_1m=0, output_cost_per_1m=0, categories=["general"], enabled=True),
-        Model(id="b", provider_name="local2", display_name="B", model_id="b",
-              input_cost_per_1m=0, output_cost_per_1m=0, categories=["general"], enabled=True),
+        Model(
+            id="a",
+            provider_name="local1",
+            display_name="A",
+            model_id="a",
+            input_cost_per_1m=0,
+            output_cost_per_1m=0,
+            categories=["general"],
+            enabled=True,
+        ),
+        Model(
+            id="b",
+            provider_name="local2",
+            display_name="B",
+            model_id="b",
+            input_cost_per_1m=0,
+            output_cost_per_1m=0,
+            categories=["general"],
+            enabled=True,
+        ),
     ]
     cfg = Config(providers=providers, models=models)
     for _ in range(10):
@@ -59,10 +75,26 @@ def test_select_models_one_gateway_one_local():
         "loc": Provider(name="loc", base_url="http://loc/v1", api_key="", local=True),
     }
     models = [
-        Model(id="gw-m", provider_name="gw", display_name="GW", model_id="gw",
-              input_cost_per_1m=1, output_cost_per_1m=5, categories=["general"], enabled=True),
-        Model(id="loc-m", provider_name="loc", display_name="Loc", model_id="loc",
-              input_cost_per_1m=0, output_cost_per_1m=0, categories=["general"], enabled=True),
+        Model(
+            id="gw-m",
+            provider_name="gw",
+            display_name="GW",
+            model_id="gw",
+            input_cost_per_1m=1,
+            output_cost_per_1m=5,
+            categories=["general"],
+            enabled=True,
+        ),
+        Model(
+            id="loc-m",
+            provider_name="loc",
+            display_name="Loc",
+            model_id="loc",
+            input_cost_per_1m=0,
+            output_cost_per_1m=0,
+            categories=["general"],
+            enabled=True,
+        ),
     ]
     cfg = Config(providers=providers, models=models)
     for _ in range(10):

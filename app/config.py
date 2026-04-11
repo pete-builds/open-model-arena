@@ -84,17 +84,20 @@ def load_config(path: str = "models.yaml") -> Config:
     for m in raw["models"]:
         if m.get("provider") not in providers:
             raise ConfigError(f"model '{m.get('id')}' references unknown provider '{m.get('provider')}'")
-        models.append(Model(
-            id=m["id"],
-            provider_name=m["provider"],
-            display_name=m["display_name"],
-            model_id=m["model_id"],
-            input_cost_per_1m=m.get("input_cost_per_1m", 0.0),
-            output_cost_per_1m=m.get("output_cost_per_1m", 0.0),
-            categories=m.get("categories", []),
-            enabled=m.get("enabled", True),
-        ))
+        models.append(
+            Model(
+                id=m["id"],
+                provider_name=m["provider"],
+                display_name=m["display_name"],
+                model_id=m["model_id"],
+                input_cost_per_1m=m.get("input_cost_per_1m", 0.0),
+                output_cost_per_1m=m.get("output_cost_per_1m", 0.0),
+                categories=m.get("categories", []),
+                enabled=m.get("enabled", True),
+            )
+        )
 
-    log.info("loaded %d providers, %d models (%d enabled)", len(providers), len(models),
-             sum(1 for m in models if m.enabled))
+    log.info(
+        "loaded %d providers, %d models (%d enabled)", len(providers), len(models), sum(1 for m in models if m.enabled)
+    )
     return Config(providers=providers, models=models)

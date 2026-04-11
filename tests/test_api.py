@@ -45,6 +45,7 @@ async def client():
     """Async test client with DB initialized."""
     # Use temp DB for tests
     import tempfile
+
     original_path = store.db_path
     store.db_path = tempfile.mktemp(suffix=".db")
 
@@ -62,6 +63,7 @@ async def client():
 
 # --- Health Check ---
 
+
 @pytest.mark.asyncio
 async def test_healthz(client):
     resp = await client.get("/healthz")
@@ -70,6 +72,7 @@ async def test_healthz(client):
 
 
 # --- Auth ---
+
 
 @pytest.mark.asyncio
 async def test_unauthenticated_api_returns_401(client):
@@ -101,6 +104,7 @@ async def test_login_wrong_passphrase(client):
 
 # --- Models ---
 
+
 @pytest.mark.asyncio
 async def test_list_models(client, auth_headers_get):
     resp = await client.get("/api/models", headers=auth_headers_get)
@@ -112,6 +116,7 @@ async def test_list_models(client, auth_headers_get):
 
 
 # --- Battle Flow ---
+
 
 @pytest.mark.asyncio
 async def test_create_battle(client, auth_headers):
@@ -209,6 +214,7 @@ async def test_csrf_required_on_post(client):
 
 # --- Leaderboard ---
 
+
 @pytest.mark.asyncio
 async def test_leaderboard_empty(client, auth_headers_get):
     resp = await client.get("/api/leaderboard", headers=auth_headers_get)
@@ -217,6 +223,7 @@ async def test_leaderboard_empty(client, auth_headers_get):
 
 
 # --- Stats ---
+
 
 @pytest.mark.asyncio
 async def test_stats(client, auth_headers_get):
@@ -229,6 +236,7 @@ async def test_stats(client, auth_headers_get):
 
 
 # --- Export ---
+
 
 @pytest.mark.asyncio
 async def test_export_json(client, auth_headers_get):

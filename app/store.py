@@ -162,9 +162,14 @@ class Store:
             " rating_a_before, rating_b_before, rating_a_after, rating_b_after)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                battle_id, model_a, model_b, winner,
-                results["rating_a_before"], results["rating_b_before"],
-                results["rating_a_after"], results["rating_b_after"],
+                battle_id,
+                model_a,
+                model_b,
+                winner,
+                results["rating_a_before"],
+                results["rating_b_before"],
+                results["rating_a_after"],
+                results["rating_b_after"],
             ),
         )
 
@@ -231,9 +236,7 @@ class Store:
         voted = await self.db.execute("SELECT COUNT(*) as c FROM battles WHERE winner IS NOT NULL")
         voted_row = await voted.fetchone()
 
-        today = await self.db.execute(
-            "SELECT COUNT(*) as c FROM battles WHERE created_at >= date('now', 'localtime')"
-        )
+        today = await self.db.execute("SELECT COUNT(*) as c FROM battles WHERE created_at >= date('now', 'localtime')")
         today_row = await today.fetchone()
 
         return {

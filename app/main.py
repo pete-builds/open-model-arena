@@ -39,8 +39,7 @@ AUTH_TOKEN_SECRET = os.environ.get("AUTH_TOKEN_SECRET", "")
 
 if not ARENA_PASSPHRASE or not AUTH_TOKEN_SECRET:
     raise SystemExit(
-        "FATAL: ARENA_PASSPHRASE and AUTH_TOKEN_SECRET must be set in environment. "
-        "See .env.example for details."
+        "FATAL: ARENA_PASSPHRASE and AUTH_TOKEN_SECRET must be set in environment. See .env.example for details."
     )
 
 
@@ -58,7 +57,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # Allow public paths and static assets for login page
-        if path in PUBLIC_PATHS or path.endswith(('.css', '.js', '.woff2', '.ico', '.svg')):
+        if path in PUBLIC_PATHS or path.endswith((".css", ".js", ".woff2", ".ico", ".svg")):
             return await call_next(request)
 
         # Check auth cookie
@@ -91,6 +90,7 @@ app.add_middleware(AuthMiddleware)
 
 
 # --- Auth Routes ---
+
 
 class LoginRequest(PydanticBaseModel):
     passphrase: str
@@ -129,6 +129,7 @@ async def login(req: LoginRequest):
 
 
 # --- Health Check ---
+
 
 @app.get("/healthz")
 async def healthz():
@@ -267,38 +268,42 @@ async def leaderboard(category: str = "overall"):
         else:
             rank = i + 1
 
-        result.append({
-            "rank": rank,
-            "model_id": row["model_id"],
-            "display_name": model.display_name if model else row["model_id"],
-            "provider": model.provider_name if model else "unknown",
-            "rating": rating,
-            "wins": row["wins"],
-            "losses": row["losses"],
-            "ties": row["ties"],
-            "win_rate": round(row["wins"] / total * 100, 1) if total > 0 else 0,
-            "avg_latency_ms": row.get("avg_latency_ms", 0),
-            "provisional": False,
-        })
+        result.append(
+            {
+                "rank": rank,
+                "model_id": row["model_id"],
+                "display_name": model.display_name if model else row["model_id"],
+                "provider": model.provider_name if model else "unknown",
+                "rating": rating,
+                "wins": row["wins"],
+                "losses": row["losses"],
+                "ties": row["ties"],
+                "win_rate": round(row["wins"] / total * 100, 1) if total > 0 else 0,
+                "avg_latency_ms": row.get("avg_latency_ms", 0),
+                "provisional": False,
+            }
+        )
 
     # Append provisional models (unranked, sorted by rating)
     for row in provisional_rows:
         model = config.get_model(row["model_id"])
         total = row["wins"] + row["losses"] + row["ties"]
         rating = round(row["rating"], 1)
-        result.append({
-            "rank": None,
-            "model_id": row["model_id"],
-            "display_name": model.display_name if model else row["model_id"],
-            "provider": model.provider_name if model else "unknown",
-            "rating": rating,
-            "wins": row["wins"],
-            "losses": row["losses"],
-            "ties": row["ties"],
-            "win_rate": round(row["wins"] / total * 100, 1) if total > 0 else 0,
-            "avg_latency_ms": row.get("avg_latency_ms", 0),
-            "provisional": True,
-        })
+        result.append(
+            {
+                "rank": None,
+                "model_id": row["model_id"],
+                "display_name": model.display_name if model else row["model_id"],
+                "provider": model.provider_name if model else "unknown",
+                "rating": rating,
+                "wins": row["wins"],
+                "losses": row["losses"],
+                "ties": row["ties"],
+                "win_rate": round(row["wins"] / total * 100, 1) if total > 0 else 0,
+                "avg_latency_ms": row.get("avg_latency_ms", 0),
+                "provisional": True,
+            }
+        )
 
     return result
 
@@ -310,8 +315,7 @@ async def stats():
 
 @app.get("/api/models")
 async def list_models():
-    return [{"id": m.id, "display_name": m.display_name, "categories": m.categories}
-            for m in config.enabled_models()]
+    return [{"id": m.id, "display_name": m.display_name, "categories": m.categories} for m in config.enabled_models()]
 
 
 @app.get("/api/export")
@@ -337,9 +341,24 @@ async def export_battles(format: str = "csv"):
     # CSV
     output = io.StringIO()
     if battles:
-        fields = ["id", "prompt", "category", "model_a", "model_a_name", "model_b", "model_b_name",
-                   "winner", "latency_a_ms", "latency_b_ms", "tokens_a", "tokens_b",
-                   "cost_a", "cost_b", "created_at", "voted_at"]
+        fields = [
+            "id",
+            "prompt",
+            "category",
+            "model_a",
+            "model_a_name",
+            "model_b",
+            "model_b_name",
+            "winner",
+            "latency_a_ms",
+            "latency_b_ms",
+            "tokens_a",
+            "tokens_b",
+            "cost_a",
+            "cost_b",
+            "created_at",
+            "voted_at",
+        ]
         writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(battles)
@@ -352,6 +371,7 @@ async def export_battles(format: str = "csv"):
 
 
 # --- Static Files + SPA Routing ---
+
 
 @app.get("/battle/{battle_id}")
 async def battle_page(battle_id: str):
