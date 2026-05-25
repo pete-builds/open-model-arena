@@ -60,5 +60,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Stage runtime config from example
+        run: cp models.yaml.example models.yaml
+
       - name: Build Docker image
         run: docker build -t open-model-arena:test .
