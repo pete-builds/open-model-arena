@@ -1,5 +1,7 @@
 """Tests for the Store (database layer)."""
 
+import asyncio
+
 import pytest
 
 
@@ -66,6 +68,45 @@ async def test_double_vote_rejected(test_store):
 
     with pytest.raises(ValueError, match="already voted"):
         await test_store.record_vote(battle_id, "b")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_double_vote_race(test_store):
+    """Two votes racing on the same battle: exactly one wins, ratings move once.
+
+    The sequential double-vote test can't catch the TOCTOU race in record_vote
+    because it never interleaves at the await boundaries. This fires both votes
+    concurrently via asyncio.gather and asserts the atomic claim holds.
+    """
+    battle_id = await test_store.create_battle("race", "general", "model-alpha", "model-beta")
+    await test_store.update_response_a(battle_id, "A", 300, 50, 0.001)
+    await test_store.update_response_b(battle_id, "B", 400, 60, 0.002)
+
+    results = await asyncio.gather(
+        test_store.record_vote(battle_id, "a"),
+        test_store.record_vote(battle_id, "b"),
+        return_exceptions=True,
+    )
+
+    successes = [r for r in results if isinstance(r, dict)]
+    failures = [r for r in results if isinstance(r, ValueError)]
+    assert len(successes) == 1, f"expected exactly one success, got {results}"
+    assert len(failures) == 1, f"expected exactly one failure, got {results}"
+    assert str(failures[0]) == "already voted"
+
+    # vote_log has exactly one row for this battle.
+    cursor = await test_store.db.execute(
+        "SELECT COUNT(*) AS c FROM vote_log WHERE battle_id = ?", (battle_id,)
+    )
+    assert (await cursor.fetchone())["c"] == 1
+
+    # Ratings moved exactly once (one win, one loss; no double-count).
+    overall = await test_store.get_leaderboard("overall")
+    assert {r["wins"] for r in overall} == {0, 1}
+    assert {r["losses"] for r in overall} == {0, 1}
+    assert sorted(round(r["rating"], 4) for r in overall) == sorted(
+        [round(1500.0 - 16.0, 4), round(1500.0 + 16.0, 4)]
+    )
 
 
 @pytest.mark.asyncio

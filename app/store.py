@@ -117,7 +117,17 @@ class Store:
         battle = await self.get_battle(battle_id)
         if not battle:
             raise ValueError("battle not found")
-        if battle["winner"]:
+
+        # Atomically claim the vote up front. This conditional UPDATE only
+        # succeeds for the first caller (winner IS NULL); concurrent callers
+        # interleaving at the await boundaries below will see rowcount == 0 and
+        # bail, so the Elo update + vote_log insert run exactly once per battle.
+        cursor = await self.db.execute(
+            "UPDATE battles SET winner = ?, voted_at = datetime('now')"
+            " WHERE id = ? AND winner IS NULL",
+            (winner, battle_id),
+        )
+        if cursor.rowcount == 0:
             raise ValueError("already voted")
 
         model_a = battle["model_a"]
@@ -173,11 +183,8 @@ class Store:
             ),
         )
 
-        # Mark battle as voted
-        await self.db.execute(
-            "UPDATE battles SET winner = ?, voted_at = datetime('now') WHERE id = ?",
-            (winner, battle_id),
-        )
+        # Single commit: the claim above plus the Elo updates and vote_log
+        # insert all land atomically.
         await self.db.commit()
 
         return results
