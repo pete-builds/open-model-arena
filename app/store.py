@@ -123,8 +123,7 @@ class Store:
         # interleaving at the await boundaries below will see rowcount == 0 and
         # bail, so the Elo update + vote_log insert run exactly once per battle.
         cursor = await self.db.execute(
-            "UPDATE battles SET winner = ?, voted_at = datetime('now')"
-            " WHERE id = ? AND winner IS NULL",
+            "UPDATE battles SET winner = ?, voted_at = datetime('now') WHERE id = ? AND winner IS NULL",
             (winner, battle_id),
         )
         if cursor.rowcount == 0:

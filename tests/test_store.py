@@ -95,18 +95,14 @@ async def test_concurrent_double_vote_race(test_store):
     assert str(failures[0]) == "already voted"
 
     # vote_log has exactly one row for this battle.
-    cursor = await test_store.db.execute(
-        "SELECT COUNT(*) AS c FROM vote_log WHERE battle_id = ?", (battle_id,)
-    )
+    cursor = await test_store.db.execute("SELECT COUNT(*) AS c FROM vote_log WHERE battle_id = ?", (battle_id,))
     assert (await cursor.fetchone())["c"] == 1
 
     # Ratings moved exactly once (one win, one loss; no double-count).
     overall = await test_store.get_leaderboard("overall")
     assert {r["wins"] for r in overall} == {0, 1}
     assert {r["losses"] for r in overall} == {0, 1}
-    assert sorted(round(r["rating"], 4) for r in overall) == sorted(
-        [round(1500.0 - 16.0, 4), round(1500.0 + 16.0, 4)]
-    )
+    assert sorted(round(r["rating"], 4) for r in overall) == sorted([round(1500.0 - 16.0, 4), round(1500.0 + 16.0, 4)])
 
 
 @pytest.mark.asyncio
