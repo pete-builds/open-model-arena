@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **LLM-as-judge.** Optional `judge:` section in `models.yaml` designates
+  any configured model as an automated evaluator. A "let \<judge\> decide"
+  button appears in the battle view once both responses arrive; new
+  `POST /api/battle/{id}/judge` runs the judge against a rubric (sensible
+  default; overridable per config), records the verdict as a vote with
+  `method="judge"`, and stores the reasoning + cost on the vote log for
+  audit. The reveal view surfaces the judge's reasoning inline. Permalinks
+  round-trip the method + reasoning. New `app/judge.py` (JSON verdict
+  parser tolerates fenced / prose-wrapped replies), `app/config.py` gets
+  `Judge` + `judge_model()`, `app/store.py` gains additive
+  `method`/`judge_reasoning`/`judge_model_id`/`judge_cost` columns via
+  idempotent `ALTER TABLE`, new `/api/features` endpoint so the frontend
+  renders the button conditionally. 20 new tests (`test_judge.py` +
+  integration tests in `test_api.py`); suite goes from 104 to 124.
 - **API bearer tokens for headless / CI use.** New `ARENA_API_TOKENS` env
   var accepts a comma-separated list of tokens; every `/api/*` route
   accepts `Authorization: Bearer <token>` or the `X-API-Token` alias.

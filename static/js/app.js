@@ -4,7 +4,7 @@ import { $, $$, state } from './state.js';
 import { initTheme, toggleTheme } from './theme.js';
 import { setupTemplates } from './templates.js';
 import { loadLeaderboard, exportData } from './leaderboard.js';
-import { startBattle, submitVote, loadPermalink } from './battle.js';
+import { startBattle, submitVote, loadPermalink, requestJudgeVote } from './battle.js';
 
 // --- Stats ---
 
@@ -27,6 +27,20 @@ async function loadModels() {
         if (!resp.ok) return;
         state.allModels = await resp.json();
         populateModelSelects();
+    } catch (e) { /* silent */ }
+}
+
+async function loadFeatures() {
+    try {
+        const resp = await fetch('/api/features');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data.judge && data.judge.enabled) {
+            state.judgeEnabled = true;
+            state.judgeName = data.judge.display_name || data.judge.model_id || 'the judge';
+            const nameEl = $('#judge-model-name');
+            if (nameEl) nameEl.textContent = state.judgeName;
+        }
     } catch (e) { /* silent */ }
 }
 
@@ -168,6 +182,12 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.addEventListener('click', () => submitVote(btn.dataset.vote));
     });
 
+    // Judge button — invoke LLM-as-judge to cast an automated vote
+    const judgeBtn = $('#judge-btn');
+    if (judgeBtn) {
+        judgeBtn.addEventListener('click', requestJudgeVote);
+    }
+
     // Share button — copies the current battle permalink
     const shareBtn = $('#share-btn');
     if (shareBtn) {
@@ -211,5 +231,6 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('popstate', route);
 
     loadModels();
+    loadFeatures();
     route();
 });

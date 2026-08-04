@@ -568,3 +568,157 @@ async def test_no_bearer_configured_blocks_bearer_path(client, monkeypatch):
     monkeypatch.setattr(main, "API_TOKENS", [])
     resp = await client.get("/api/models", headers={"authorization": "Bearer anything"})
     assert resp.status_code == 401
+
+
+# --- Features endpoint ---
+
+
+@pytest.mark.asyncio
+async def test_features_reports_judge_off_by_default(client, auth_headers_get):
+    resp = await client.get("/api/features", headers=auth_headers_get)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "judge" in data
+    # example config has no judge configured
+    assert data["judge"]["enabled"] is False
+
+
+# --- Judge endpoint ---
+
+
+@pytest.mark.asyncio
+async def test_judge_endpoint_400_when_not_configured(client, auth_headers, auth_headers_get):
+    # Create + populate a battle so the check that fails is judge-config, not battle-state.
+    create_resp = await client.post(
+        "/api/battle",
+        json={"prompt": "explain", "category": "general"},
+        headers=auth_headers,
+    )
+    battle_id = create_resp.json()["battle_id"]
+    await store.update_response_a(battle_id, "A ans", 100, 20, 0.0)
+    await store.update_response_b(battle_id, "B ans", 200, 30, 0.0)
+
+    resp = await client.post(f"/api/battle/{battle_id}/judge", headers=auth_headers)
+    assert resp.status_code == 400
+    assert "judge not configured" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_judge_endpoint_end_to_end(client, auth_headers, monkeypatch):
+    """With a judge configured and mocked out, /judge casts a vote with method='judge'."""
+    from app import main
+    from app.config import Judge, Model
+
+    # Inject a fake judge model into the running config
+    judge_model = Model(
+        id="fake-judge",
+        provider_name=next(iter(main.config.providers)),
+        display_name="Fake Judge",
+        model_id="fake-judge",
+        input_cost_per_1m=0.0,
+        output_cost_per_1m=0.0,
+    )
+    monkeypatch.setattr(main.config, "models", main.config.models + [judge_model], raising=False)
+    monkeypatch.setattr(main.config, "judge", Judge(model_id="fake-judge", rubric="rubric"), raising=False)
+
+    # Mock run_judge to skip the actual OpenAI call
+    async def fake_run_judge(*args, **kwargs):
+        return {
+            "winner": "b",
+            "reasoning": "B answered correctly.",
+            "latency_ms": 42,
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "cost": 0.0004,
+            "judge_model_id": "fake-judge",
+            "judge_display_name": "Fake Judge",
+        }
+
+    monkeypatch.setattr(main, "run_judge", fake_run_judge)
+
+    # Set up a battle with responses
+    create_resp = await client.post(
+        "/api/battle",
+        json={"prompt": "which is better?", "category": "general"},
+        headers=auth_headers,
+    )
+    battle_id = create_resp.json()["battle_id"]
+    await store.update_response_a(battle_id, "A wins", 100, 20, 0.0)
+    await store.update_response_b(battle_id, "B wins", 200, 30, 0.0)
+
+    resp = await client.post(f"/api/battle/{battle_id}/judge", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["vote_method"] == "judge"
+    assert data["judge_reasoning"] == "B answered correctly."
+    assert data["judge_display_name"] == "Fake Judge"
+    assert data["rating_b_after"] > 1500.0  # B won
+    assert data["rating_a_after"] < 1500.0
+
+    # Permalink now reports the method + reasoning
+    perma = await client.get(f"/api/battle/{battle_id}", headers={"cookie": _cookie_header(_auth_cookies())})
+    perma_data = perma.json()
+    assert perma_data["vote_method"] == "judge"
+    assert perma_data["judge_reasoning"] == "B answered correctly."
+    assert perma_data["judge_model_id"] == "fake-judge"
+
+
+@pytest.mark.asyncio
+async def test_judge_endpoint_409_when_already_voted(client, auth_headers, monkeypatch):
+    from app import main
+    from app.config import Judge, Model
+
+    judge_model = Model(
+        id="fake-judge-2",
+        provider_name=next(iter(main.config.providers)),
+        display_name="Fake",
+        model_id="fake",
+        input_cost_per_1m=0.0,
+        output_cost_per_1m=0.0,
+    )
+    monkeypatch.setattr(main.config, "models", main.config.models + [judge_model], raising=False)
+    monkeypatch.setattr(main.config, "judge", Judge(model_id="fake-judge-2"), raising=False)
+
+    create_resp = await client.post(
+        "/api/battle",
+        json={"prompt": "q", "category": "general"},
+        headers=auth_headers,
+    )
+    battle_id = create_resp.json()["battle_id"]
+    await store.update_response_a(battle_id, "a", 100, 20, 0.0)
+    await store.update_response_b(battle_id, "b", 200, 30, 0.0)
+    # Cast a human vote first
+    vote_resp = await client.post(f"/api/battle/{battle_id}/vote", json={"winner": "a"}, headers=auth_headers)
+    assert vote_resp.status_code == 200
+
+    resp = await client.post(f"/api/battle/{battle_id}/judge", headers=auth_headers)
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_judge_endpoint_400_when_responses_missing(client, auth_headers, monkeypatch):
+    from app import main
+    from app.config import Judge, Model
+
+    judge_model = Model(
+        id="fake-judge-3",
+        provider_name=next(iter(main.config.providers)),
+        display_name="Fake",
+        model_id="fake",
+        input_cost_per_1m=0.0,
+        output_cost_per_1m=0.0,
+    )
+    monkeypatch.setattr(main.config, "models", main.config.models + [judge_model], raising=False)
+    monkeypatch.setattr(main.config, "judge", Judge(model_id="fake-judge-3"), raising=False)
+
+    create_resp = await client.post(
+        "/api/battle",
+        json={"prompt": "q", "category": "general"},
+        headers=auth_headers,
+    )
+    battle_id = create_resp.json()["battle_id"]
+    # Do NOT populate responses
+
+    resp = await client.post(f"/api/battle/{battle_id}/judge", headers=auth_headers)
+    assert resp.status_code == 400
+    assert "both responses" in resp.json()["detail"]

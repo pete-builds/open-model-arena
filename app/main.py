@@ -18,6 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .arena import select_models, stream_battle
 from .auth import bearer_from_request_headers, bearer_matches, load_api_tokens, make_token
 from .config import load_config
+from .judge import JudgeError, run_judge
 from .models import BattleRequest, VoteRequest
 from .ratelimit import RateLimiter
 from .store import Store
@@ -297,6 +298,83 @@ async def get_battle(battle_id: str):
         "rating_b_before": elo["rating_b_before"] if elo else None,
         "rating_a_after": elo["rating_a_after"] if elo else None,
         "rating_b_after": elo["rating_b_after"] if elo else None,
+        "vote_method": elo["method"] if elo else None,
+        "judge_reasoning": elo["judge_reasoning"] if elo else None,
+        "judge_model_id": elo["judge_model_id"] if elo else None,
+        "judge_cost": elo["judge_cost"] if elo else None,
+    }
+
+
+@app.post("/api/battle/{battle_id}/judge")
+async def judge_battle(battle_id: str):
+    """Have the configured judge model decide the winner and cast a vote.
+
+    Requires ``judge:`` to be set in models.yaml. Returns the same payload as
+    ``POST .../vote`` plus the judge's reasoning and cost. The judge cannot
+    vote if either response is missing/errored — the caller should fall back
+    to a human vote in that case.
+    """
+    _validate_battle_id(battle_id)
+    if not config.judge:
+        raise HTTPException(400, "judge not configured; add a 'judge:' section to models.yaml")
+    judge_model = config.judge_model()
+    if not judge_model:
+        raise HTTPException(500, f"judge model '{config.judge.model_id}' not found in config")
+
+    battle = await store.get_battle(battle_id)
+    if not battle:
+        raise HTTPException(404, "battle not found")
+    if battle.get("winner"):
+        raise HTTPException(409, "battle already voted")
+    if not battle.get("response_a") or not battle.get("response_b"):
+        raise HTTPException(400, "both responses must complete before judging")
+
+    try:
+        verdict = await run_judge(
+            config,
+            config.judge,
+            judge_model,
+            battle["prompt"],
+            battle["response_a"],
+            battle["response_b"],
+        )
+    except JudgeError as e:
+        raise HTTPException(502, f"judge failed: {e}") from e
+
+    try:
+        elo_results = await store.record_vote(
+            battle_id,
+            verdict["winner"],
+            method="judge",
+            judge_reasoning=verdict["reasoning"],
+            judge_model_id=verdict["judge_model_id"],
+            judge_cost=verdict["cost"],
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    model_a = config.get_model(battle["model_a"])
+    model_b = config.get_model(battle["model_b"])
+    return {
+        "model_a_id": battle["model_a"],
+        "model_a_name": model_a.display_name if model_a else battle["model_a"],
+        "model_a_provider": model_a.provider_name if model_a else "unknown",
+        "model_b_id": battle["model_b"],
+        "model_b_name": model_b.display_name if model_b else battle["model_b"],
+        "model_b_provider": model_b.provider_name if model_b else "unknown",
+        "latency_a_ms": battle["latency_a_ms"],
+        "latency_b_ms": battle["latency_b_ms"],
+        "tokens_a": battle["tokens_a"],
+        "tokens_b": battle["tokens_b"],
+        "cost_a": battle["cost_a"],
+        "cost_b": battle["cost_b"],
+        "vote_method": "judge",
+        "judge_reasoning": verdict["reasoning"],
+        "judge_model_id": verdict["judge_model_id"],
+        "judge_display_name": verdict["judge_display_name"],
+        "judge_cost": verdict["cost"],
+        "judge_latency_ms": verdict["latency_ms"],
+        **elo_results,
     }
 
 
@@ -376,6 +454,19 @@ async def stats():
 @app.get("/api/models")
 async def list_models():
     return [{"id": m.id, "display_name": m.display_name, "categories": m.categories} for m in config.enabled_models()]
+
+
+@app.get("/api/features")
+async def features():
+    """Publish server-side feature flags so the frontend can render conditionally."""
+    judge_model = config.judge_model()
+    return {
+        "judge": {
+            "enabled": judge_model is not None,
+            "model_id": judge_model.id if judge_model else None,
+            "display_name": judge_model.display_name if judge_model else None,
+        },
+    }
 
 
 @app.get("/api/export")

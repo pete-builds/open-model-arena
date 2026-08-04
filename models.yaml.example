@@ -76,3 +76,20 @@ models:
   #   output_cost_per_1m: 15.0
   #   categories: [general, coding, reasoning, creative]
   #   enabled: false
+
+# --- LLM-as-judge (optional) ---
+#
+# When set, a "let <model> decide" button appears in the battle view. The
+# judge sees both responses labelled A/B, evaluates them against the
+# rubric, and returns a JSON verdict which is recorded as an automated
+# vote (method = "judge") in the audit log. A human vote is always still
+# available; the judge just adds a second option.
+#
+# The judge SHOULD be one of the strongest models available to you — if
+# you're using GPT-4o + Mistral 7B for battles, GPT-4o is the right judge.
+# Judge cost is tracked separately in the audit log.
+#
+# judge:
+#   model: gpt-4o        # must match an id in the models list above
+#   # rubric: |          # optional; a sane default is used when omitted
+#   #   Score correctness first, then helpfulness, then clarity.

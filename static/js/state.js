@@ -17,5 +17,7 @@ export const state = {
     battleMeta: { a: {}, b: {} },
     allModels: [],
     lbCategory: 'overall',
+    judgeEnabled: false,
+    judgeName: 'the judge',
     showView: null, // set by app.js to avoid circular imports
 };

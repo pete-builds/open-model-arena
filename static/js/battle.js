@@ -55,6 +55,12 @@ function streamBattle(battleId) {
     $('#status-b').textContent = 'streaming...';
     $('#vote-section').classList.add('hidden');
     $('#skip-section').classList.add('hidden');
+    $('#judge-section').classList.add('hidden');
+    const judgeBtn = $('#judge-btn');
+    if (judgeBtn) {
+        judgeBtn.disabled = false;
+        judgeBtn.innerHTML = 'let <span id="judge-model-name">' + (state.judgeName || 'the judge') + '</span> decide';
+    }
 
     const cursorA = document.createElement('span');
     cursorA.className = 'typing-cursor';
@@ -152,6 +158,42 @@ function showVoteButtons() {
     $('#vote-section').classList.remove('hidden');
     $('#vote-section').classList.add('fade-in');
     $('#skip-section').classList.remove('hidden');
+
+    // Judge button only shown when both responses are usable AND server has judge configured
+    const bothPresent = state.responseA.trim() && state.responseB.trim();
+    if (state.judgeEnabled && bothPresent) {
+        $('#judge-section').classList.remove('hidden');
+    }
+}
+
+export async function requestJudgeVote() {
+    if (!state.currentBattleId) return;
+    const btn = $('#judge-btn');
+    const origLabel = btn.innerHTML;
+    btn.disabled = true;
+    btn.textContent = 'judging…';
+    $$('.vote-btn').forEach(b => b.disabled = true);
+    try {
+        const resp = await fetch(`/api/battle/${state.currentBattleId}/judge`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
+        });
+        if (resp.status === 401 || resp.status === 403) {
+            window.location.href = '/login';
+            return;
+        }
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ detail: 'judge failed' }));
+            throw new Error(err.detail || 'judge failed');
+        }
+        const data = await resp.json();
+        showReveal(data);
+    } catch (err) {
+        alert('Judge error: ' + err.message);
+        $$('.vote-btn').forEach(b => b.disabled = false);
+        btn.disabled = false;
+        btn.innerHTML = origLabel;
+    }
 }
 
 export async function submitVote(winner) {
@@ -237,6 +279,16 @@ function showReveal(data) {
     } else {
         $('#reveal-footer-a').textContent = '';
         $('#reveal-footer-b').textContent = '';
+    }
+
+    // Judge verdict — visible only when a judge cast this vote.
+    const verdictBlock = $('#judge-verdict');
+    if (data.vote_method === 'judge' && data.judge_reasoning) {
+        $('#verdict-judge-name').textContent = data.judge_display_name || data.judge_model_id || 'the judge';
+        $('#verdict-reasoning').textContent = data.judge_reasoning;
+        verdictBlock.classList.remove('hidden');
+    } else {
+        verdictBlock.classList.add('hidden');
     }
 
     // Put the permalink in the address bar so the user can copy the URL directly.

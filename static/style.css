@@ -424,6 +424,63 @@ body {
     border-color: var(--accent);
 }
 
+/* Judge feature */
+.judge-section {
+    margin-top: 0.5rem;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--text-dim);
+}
+
+#judge-btn {
+    background: none;
+    border: 1px dashed var(--border);
+    color: var(--text-dim);
+    padding: 0.35rem 0.9rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.05em;
+    transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+#judge-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    border-style: solid;
+    color: var(--accent);
+}
+
+#judge-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.verdict-block {
+    margin-top: 0.75rem;
+    padding: 0.65rem 0.9rem;
+    background: var(--surface);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+}
+
+.verdict-label {
+    color: var(--accent);
+    font-size: 0.65rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 0.35rem;
+}
+
+.verdict-body {
+    color: var(--text);
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
 /* Battle View — Split Panel */
 .battle-panels {
     display: grid;

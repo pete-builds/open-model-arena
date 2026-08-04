@@ -103,6 +103,11 @@
                 <button class="vote-btn vote-tie" data-vote="tie">TIE</button>
                 <button class="vote-btn vote-b" data-vote="b">B WINS</button>
             </div>
+            <div class="judge-section hidden" id="judge-section">
+                <button class="btn-link" id="judge-btn" type="button">
+                    let <span id="judge-model-name">the judge</span> decide
+                </button>
+            </div>
             <div class="skip-section hidden" id="skip-section">
                 <button class="btn-link" id="skip-btn">skip (don't vote)</button>
             </div>
@@ -115,6 +120,10 @@
                 <button id="share-btn" class="share-btn" type="button" title="Copy a shareable link to this battle">
                     <span class="share-btn-text">SHARE</span>
                 </button>
+            </div>
+            <div class="verdict-block hidden" id="judge-verdict">
+                <div class="verdict-label">Judged by <span id="verdict-judge-name"></span></div>
+                <div class="verdict-body" id="verdict-reasoning"></div>
             </div>
             <div class="battle-panels">
                 <div class="panel side-a">

@@ -57,6 +57,16 @@ CREATE TABLE IF NOT EXISTS vote_log (
 );
 """
 
+# Column-level additions applied idempotently after schema creation. SQLite
+# doesn't support ADD COLUMN IF NOT EXISTS, so we swallow the "duplicate
+# column" OperationalError from re-runs.
+_ADDITIVE_COLUMNS = [
+    ("vote_log", "method", "TEXT NOT NULL DEFAULT 'human'"),
+    ("vote_log", "judge_reasoning", "TEXT"),
+    ("vote_log", "judge_model_id", "TEXT"),
+    ("vote_log", "judge_cost", "REAL"),
+]
+
 
 def _gen_id(length: int = 16) -> str:
     alphabet = string.ascii_letters + string.digits
@@ -74,6 +84,14 @@ class Store:
             self.db.row_factory = aiosqlite.Row
             await self.db.execute("PRAGMA journal_mode=WAL")
             await self.db.executescript(SCHEMA)
+            for table, column, spec in _ADDITIVE_COLUMNS:
+                try:
+                    await self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {spec}")
+                except aiosqlite.OperationalError as e:
+                    # Column already exists — the ALTER for it landed on a
+                    # prior boot. SQLite has no ADD COLUMN IF NOT EXISTS.
+                    if "duplicate column" not in str(e).lower():
+                        raise
             await self.db.commit()
             log.info("database connected: %s", self.db_path)
         except Exception as e:
@@ -113,7 +131,15 @@ class Store:
         )
         await self.db.commit()
 
-    async def record_vote(self, battle_id: str, winner: str) -> dict:
+    async def record_vote(
+        self,
+        battle_id: str,
+        winner: str,
+        method: str = "human",
+        judge_reasoning: str | None = None,
+        judge_model_id: str | None = None,
+        judge_cost: float | None = None,
+    ) -> dict:
         battle = await self.get_battle(battle_id)
         if not battle:
             raise ValueError("battle not found")
@@ -168,8 +194,9 @@ class Store:
         # Log vote
         await self.db.execute(
             "INSERT INTO vote_log (battle_id, model_a, model_b, winner,"
-            " rating_a_before, rating_b_before, rating_a_after, rating_b_after)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " rating_a_before, rating_b_before, rating_a_after, rating_b_after,"
+            " method, judge_reasoning, judge_model_id, judge_cost)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 battle_id,
                 model_a,
@@ -179,6 +206,10 @@ class Store:
                 results["rating_b_before"],
                 results["rating_a_after"],
                 results["rating_b_after"],
+                method,
+                judge_reasoning,
+                judge_model_id,
+                judge_cost,
             ),
         )
 
@@ -227,9 +258,10 @@ class Store:
         return result
 
     async def get_vote_log(self, battle_id: str) -> dict | None:
-        """Return the ELO delta row for a battle's vote, or None if unvoted."""
+        """Return the ELO delta + method row for a battle's vote, or None if unvoted."""
         cursor = await self.db.execute(
-            "SELECT rating_a_before, rating_b_before, rating_a_after, rating_b_after "
+            "SELECT rating_a_before, rating_b_before, rating_a_after, rating_b_after, "
+            "method, judge_reasoning, judge_model_id, judge_cost "
             "FROM vote_log WHERE battle_id = ? ORDER BY id DESC LIMIT 1",
             (battle_id,),
         )

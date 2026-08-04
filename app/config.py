@@ -33,10 +33,27 @@ class Model:
     enabled: bool = True
 
 
+DEFAULT_JUDGE_RUBRIC = """You are an impartial judge comparing two AI responses to the same prompt.
+Score each on: correctness, faithfulness to the prompt, helpfulness, and clarity.
+Penalize hallucinations and evasive answers.
+Return ONLY a compact JSON object of the shape:
+  {"winner": "a" | "b" | "tie", "reasoning": "<one or two sentences>"}
+No prose outside the JSON. If either response is empty, errored, or unusable, the other wins."""
+
+
+@dataclass
+class Judge:
+    """Optional judge configuration for LLM-as-judge automated voting."""
+
+    model_id: str
+    rubric: str = DEFAULT_JUDGE_RUBRIC
+
+
 @dataclass
 class Config:
     providers: dict[str, Provider]
     models: list[Model]
+    judge: Judge | None = None
 
     def get_provider(self, name: str) -> Provider:
         return self.providers[name]
@@ -52,6 +69,12 @@ class Config:
         if category:
             result = [m for m in result if category in m.categories]
         return result
+
+    def judge_model(self) -> Model | None:
+        """Return the configured judge model, or None if judge is disabled."""
+        if not self.judge:
+            return None
+        return self.get_model(self.judge.model_id)
 
 
 def load_config(path: str = "models.yaml") -> Config:
@@ -97,7 +120,21 @@ def load_config(path: str = "models.yaml") -> Config:
             )
         )
 
+    judge: Judge | None = None
+    judge_raw = raw.get("judge")
+    if judge_raw:
+        judge_model_id = judge_raw.get("model")
+        if not judge_model_id:
+            raise ConfigError("judge: entry must specify 'model'")
+        if not any(m.id == judge_model_id for m in models):
+            raise ConfigError(f"judge references unknown model id '{judge_model_id}'")
+        judge = Judge(
+            model_id=judge_model_id,
+            rubric=judge_raw.get("rubric") or DEFAULT_JUDGE_RUBRIC,
+        )
+        log.info("judge configured: %s", judge_model_id)
+
     log.info(
         "loaded %d providers, %d models (%d enabled)", len(providers), len(models), sum(1 for m in models if m.enabled)
     )
-    return Config(providers=providers, models=models)
+    return Config(providers=providers, models=models, judge=judge)
