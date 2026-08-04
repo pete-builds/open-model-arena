@@ -25,6 +25,7 @@ export default defineConfig({
             { label: 'LLM-as-Judge', link: '/guides/judge-mode/' },
             { label: 'Headless API', link: '/guides/headless-api/' },
             { label: 'Deployment', link: '/guides/deployment/' },
+            { label: 'Auto-Deploy', link: '/guides/autodeploy/' },
           ],
         },
         {

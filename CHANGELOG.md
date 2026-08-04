@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Auto-deploy pipeline scaffolding.** `release.yml` grew SLSA v1
+  build-provenance attestations (cosign keyless via OIDC — no long-lived
+  keys) and an auto-bump step that rewrites the pinned image tag in
+  `docker-compose.yml` on every tag push. `docker-compose.yml` now
+  ships as image-based (pinned to `ghcr.io/pete-builds/open-model-arena`)
+  so a `git pull` alone rolls forward; `docker-compose.dev.yml` is the
+  local build-from-source override. `deploy/autodeploy.env.example` +
+  `deploy/docker-compose.override.example.yml` document the nix1-side
+  onboarding (per-service config, staggered cron, gitignored host
+  override, Discord webhook). New docs page under
+  `/guides/autodeploy/` walks the three-stage pattern and the cosign
+  verification command.
 - **Docs site.** New Astro + Starlight site under `docs/site/`, published
   to <https://pete-builds.github.io/open-model-arena/> via a `docs.yml`
   workflow on every `main` push that touches `docs/site/**`. Ships pages

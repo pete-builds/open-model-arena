@@ -1,0 +1,22 @@
+# Example host-specific compose override.
+#
+# Docker Compose auto-loads a `docker-compose.override.yml` sitting next to
+# the main compose file. Keep host-specific tweaks here (image pin,
+# network mode, extra ports, mount paths) and never edit the base
+# docker-compose.yml.
+#
+# The nix1 auto-deploy script writes the current image pin here — that's
+# how a new GHCR release becomes a live container without a git-pull.
+#
+# Copy to `docker-compose.override.yml` alongside your `docker-compose.yml`;
+# the file is gitignored.
+
+services:
+  model-arena:
+    # Pin to a specific released version. Auto-deploy replaces this line.
+    image: ghcr.io/pete-builds/open-model-arena:0.1.0
+
+    # Optional: host networking (skip bridge, useful when the docker
+    # bridge subnet is exhausted on a shared host).
+    # network_mode: host
+    # ports: !reset []

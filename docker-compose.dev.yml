@@ -1,0 +1,9 @@
+# Dev override — builds the image from source instead of pulling GHCR.
+# Merge onto the main compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+
+services:
+  model-arena:
+    image: !reset null
+    build: .

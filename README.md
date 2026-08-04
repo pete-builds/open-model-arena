@@ -59,7 +59,11 @@ cp .env.example .env
 #   ARENA_PASSPHRASE=your-secret-phrase
 #   AUTH_TOKEN_SECRET=$(openssl rand -hex 32)
 
+# Pulls the pinned image from GHCR (auto-bumped on every release).
 docker compose up -d
+
+# Or build from source (for hacking on the app):
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
 
 Open `http://localhost:3694`

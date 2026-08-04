@@ -1,6 +1,17 @@
+# Public deployment recipe: pinned image from GHCR.
+# The image tag is auto-bumped by the release workflow on every tag push,
+# so a plain `git pull` on the source of truth stays current.
+#
+# To build from source instead (local dev):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# To pin host-specific tweaks (network mode, port mapping, extra env),
+# add a `docker-compose.override.yml` — Docker Compose merges it in
+# automatically. That file is gitignored so it never leaks upstream.
+
 services:
   model-arena:
-    build: .
+    image: ghcr.io/pete-builds/open-model-arena:0.1.0
     container_name: model-arena
     restart: unless-stopped
     ports:

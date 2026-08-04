@@ -6,6 +6,10 @@ models.yaml
 TEAMS-MESSAGE.md
 PROJECT-SUMMARY.md
 private/
+
+# Host-specific compose overrides (network mode, extra ports, secrets)
+docker-compose.override.yml
+docker-compose.override.yaml
 .venv/
 .venv-test/
 .coverage
