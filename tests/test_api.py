@@ -513,3 +513,58 @@ async def test_get_battle_voted_returns_full_reveal(client, auth_headers, auth_h
 async def test_get_battle_requires_auth(client):
     resp = await client.get("/api/battle/abcdefghij123456")
     assert resp.status_code == 401
+
+
+# --- Bearer-token API auth ---
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_allows_get_without_cookie(client, monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main, "API_TOKENS", ["test-bearer-1"])
+    resp = await client.get("/api/models", headers={"authorization": "Bearer test-bearer-1"})
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_x_api_token_header_also_works(client, monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main, "API_TOKENS", ["test-bearer-2"])
+    resp = await client.get("/api/models", headers={"x-api-token": "test-bearer-2"})
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_wrong_value_rejected(client, monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main, "API_TOKENS", ["only-me"])
+    resp = await client.get("/api/models", headers={"authorization": "Bearer nope"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_post_skips_csrf(client, monkeypatch):
+    """Bearer clients can't carry a CSRF double-submit; auth must let them through."""
+    from app import main
+
+    monkeypatch.setattr(main, "API_TOKENS", ["ci-bot"])
+    resp = await client.post(
+        "/api/battle",
+        json={"prompt": "hi", "category": "general"},
+        headers={"authorization": "Bearer ci-bot"},
+    )
+    assert resp.status_code == 200
+    assert "battle_id" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_no_bearer_configured_blocks_bearer_path(client, monkeypatch):
+    """When ARENA_API_TOKENS is empty, bearer requests fall through to cookie auth (which rejects)."""
+    from app import main
+
+    monkeypatch.setattr(main, "API_TOKENS", [])
+    resp = await client.get("/api/models", headers={"authorization": "Bearer anything"})
+    assert resp.status_code == 401

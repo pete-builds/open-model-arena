@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import hmac
 import io
 import logging
@@ -17,6 +16,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .arena import select_models, stream_battle
+from .auth import bearer_from_request_headers, bearer_matches, load_api_tokens, make_token
 from .config import load_config
 from .models import BattleRequest, VoteRequest
 from .ratelimit import RateLimiter
@@ -45,7 +45,11 @@ if not ARENA_PASSPHRASE or not AUTH_TOKEN_SECRET:
 
 def _make_token(passphrase: str) -> str:
     """Create an HMAC token from the passphrase."""
-    return hmac.new(AUTH_TOKEN_SECRET.encode(), passphrase.encode(), hashlib.sha256).hexdigest()
+    return make_token(passphrase, AUTH_TOKEN_SECRET)
+
+
+# Bearer tokens for headless / CI use — see app/auth.py for details.
+API_TOKENS = load_api_tokens()
 
 
 # Paths that don't require auth
@@ -60,7 +64,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path in PUBLIC_PATHS or path.endswith((".css", ".js", ".woff2", ".ico", ".svg")):
             return await call_next(request)
 
-        # Check auth cookie
+        # Bearer-token path: headless / CI clients scoped to /api/*. Bearer
+        # auth skips CSRF because it isn't carried on cross-site navigations.
+        if API_TOKENS and path.startswith("/api/"):
+            bearer = bearer_from_request_headers(
+                request.headers.get("authorization"),
+                request.headers.get("x-api-token"),
+            )
+            if bearer and bearer_matches(bearer, API_TOKENS):
+                request.state.auth_method = "bearer"
+                return await call_next(request)
+
+        # Cookie path: browser session, gated by passphrase + CSRF for POST.
         token = request.cookies.get("arena_token")
         expected = _make_token(ARENA_PASSPHRASE)
         if token and hmac.compare_digest(token, expected):
@@ -70,6 +85,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 csrf_header = request.headers.get("x-csrf-token")
                 if not csrf_cookie or not csrf_header or not hmac.compare_digest(csrf_cookie, csrf_header):
                     return JSONResponse({"detail": "CSRF validation failed"}, status_code=403)
+            request.state.auth_method = "cookie"
             return await call_next(request)
 
         # Not authenticated — redirect HTML requests, 401 API requests

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **API bearer tokens for headless / CI use.** New `ARENA_API_TOKENS` env
+  var accepts a comma-separated list of tokens; every `/api/*` route
+  accepts `Authorization: Bearer <token>` or the `X-API-Token` alias.
+  Bearer-authenticated requests skip the CSRF double-submit that applies
+  to cookie sessions (bearer tokens aren't carried on cross-site
+  navigations). Constant-time comparison against every allowed token to
+  avoid position-leaking. New `app/auth.py` module + `tests/test_auth.py`
+  and five bearer-path integration tests in `tests/test_api.py`.
 - **Battle permalinks.** Every completed battle now has a shareable URL. New
   `GET /api/battle/{id}` returns the full reveal payload (prompt, both
   responses, models, latency, tokens, cost, winner, ELO deltas) for voted
