@@ -226,6 +226,16 @@ class Store:
 
         return result
 
+    async def get_vote_log(self, battle_id: str) -> dict | None:
+        """Return the ELO delta row for a battle's vote, or None if unvoted."""
+        cursor = await self.db.execute(
+            "SELECT rating_a_before, rating_b_before, rating_a_after, rating_b_after "
+            "FROM vote_log WHERE battle_id = ? ORDER BY id DESC LIMIT 1",
+            (battle_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
     async def get_all_voted_battles(self) -> list[dict]:
         cursor = await self.db.execute(
             "SELECT id, prompt, category, model_a, model_b, winner, "

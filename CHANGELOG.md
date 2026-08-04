@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Battle permalinks.** Every completed battle now has a shareable URL. New
+  `GET /api/battle/{id}` returns the full reveal payload (prompt, both
+  responses, models, latency, tokens, cost, winner, ELO deltas) for voted
+  battles only — unvoted or in-flight battles 404 so a share link never
+  leaks a mid-stream state. The reveal view auto-updates the address bar
+  to `/battle/<id>` on vote, adds a SHARE button that copies the URL, and
+  the router rehydrates the reveal view when someone opens a permalink
+  directly.
 - `CHANGELOG.md` (this file)
 - `docs/SHOWCASE-PLAN.md` — roadmap and audience framing for the
   showcase-elevation work

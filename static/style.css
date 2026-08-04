@@ -391,6 +391,39 @@ body {
     letter-spacing: 0.1em;
 }
 
+/* Reveal view — prompt + share row */
+.reveal-header {
+    display: flex;
+    align-items: stretch;
+    gap: 0.75rem;
+    margin-top: 3rem;
+}
+
+.reveal-header .prompt-display {
+    flex: 1;
+    margin-top: 0;
+}
+
+.share-btn {
+    padding: 0 1rem;
+    background: var(--surface);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    min-width: 5.5rem;
+}
+
+.share-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
 /* Battle View — Split Panel */
 .battle-panels {
     display: grid;

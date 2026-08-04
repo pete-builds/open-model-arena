@@ -181,6 +181,29 @@ export async function submitVote(winner) {
     }
 }
 
+export async function loadPermalink(battleId) {
+    // Rehydrate the reveal view from a shared /battle/<id> URL, when the user
+    // did not just come from voting themselves.
+    try {
+        const resp = await fetch(`/api/battle/${battleId}`);
+        if (resp.status === 401 || resp.status === 403) {
+            window.location.href = '/login';
+            return false;
+        }
+        if (!resp.ok) return false;
+
+        const data = await resp.json();
+        state.currentBattleId = data.id;
+        state.responseA = data.response_a;
+        state.responseB = data.response_b;
+        $('#battle-prompt').textContent = data.prompt;
+        showReveal(data);
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
+
 function showReveal(data) {
     $('#reveal-prompt').textContent = $('#battle-prompt').textContent;
 
@@ -207,8 +230,20 @@ function showReveal(data) {
     const eloClass = (v) => v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral';
     const eloSign = (v) => v > 0 ? '+' : '';
 
-    $('#reveal-footer-a').innerHTML = `ELO: ${data.rating_a_after.toFixed(0)} <span class="elo-change ${eloClass(eloChangeA)}">(${eloSign(eloChangeA)}${eloChangeA.toFixed(0)})</span>`;
-    $('#reveal-footer-b').innerHTML = `ELO: ${data.rating_b_after.toFixed(0)} <span class="elo-change ${eloClass(eloChangeB)}">(${eloSign(eloChangeB)}${eloChangeB.toFixed(0)})</span>`;
+    // ELO section is only present when the vote_log has a row — omit gracefully otherwise.
+    if (data.rating_a_after != null && data.rating_b_after != null) {
+        $('#reveal-footer-a').innerHTML = `ELO: ${data.rating_a_after.toFixed(0)} <span class="elo-change ${eloClass(eloChangeA)}">(${eloSign(eloChangeA)}${eloChangeA.toFixed(0)})</span>`;
+        $('#reveal-footer-b').innerHTML = `ELO: ${data.rating_b_after.toFixed(0)} <span class="elo-change ${eloClass(eloChangeB)}">(${eloSign(eloChangeB)}${eloChangeB.toFixed(0)})</span>`;
+    } else {
+        $('#reveal-footer-a').textContent = '';
+        $('#reveal-footer-b').textContent = '';
+    }
+
+    // Put the permalink in the address bar so the user can copy the URL directly.
+    const battleId = data.id || state.currentBattleId;
+    if (battleId && location.pathname !== `/battle/${battleId}`) {
+        history.replaceState(null, '', `/battle/${battleId}`);
+    }
 
     state.showView('reveal');
 }

@@ -240,6 +240,50 @@ async def vote(battle_id: str, req: VoteRequest):
     }
 
 
+@app.get("/api/battle/{battle_id}")
+async def get_battle(battle_id: str):
+    """Return the full completed-battle state for a permalink view.
+
+    Only voted battles are returned; in-flight and abandoned battles are 404
+    so a share link never leaks a mid-stream state.
+    """
+    _validate_battle_id(battle_id)
+    battle = await store.get_battle(battle_id)
+    if not battle or not battle.get("winner"):
+        raise HTTPException(404, "battle not found")
+
+    model_a = config.get_model(battle["model_a"])
+    model_b = config.get_model(battle["model_b"])
+    elo = await store.get_vote_log(battle_id)
+
+    return {
+        "id": battle["id"],
+        "prompt": battle["prompt"],
+        "category": battle["category"],
+        "response_a": battle["response_a"],
+        "response_b": battle["response_b"],
+        "winner": battle["winner"],
+        "created_at": battle["created_at"],
+        "voted_at": battle["voted_at"],
+        "model_a_id": battle["model_a"],
+        "model_a_name": model_a.display_name if model_a else battle["model_a"],
+        "model_a_provider": model_a.provider_name if model_a else "unknown",
+        "model_b_id": battle["model_b"],
+        "model_b_name": model_b.display_name if model_b else battle["model_b"],
+        "model_b_provider": model_b.provider_name if model_b else "unknown",
+        "latency_a_ms": battle["latency_a_ms"],
+        "latency_b_ms": battle["latency_b_ms"],
+        "tokens_a": battle["tokens_a"],
+        "tokens_b": battle["tokens_b"],
+        "cost_a": battle["cost_a"],
+        "cost_b": battle["cost_b"],
+        "rating_a_before": elo["rating_a_before"] if elo else None,
+        "rating_b_before": elo["rating_b_before"] if elo else None,
+        "rating_a_after": elo["rating_a_after"] if elo else None,
+        "rating_b_after": elo["rating_b_after"] if elo else None,
+    }
+
+
 MIN_BATTLES_FOR_RANKING = 5
 
 

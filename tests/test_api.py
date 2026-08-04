@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 os.environ.setdefault("ARENA_PASSPHRASE", "test-passphrase")
 os.environ.setdefault("AUTH_TOKEN_SECRET", "test-secret-key")
 
-from app.main import ARENA_PASSPHRASE, _make_token, app, store
+from app.main import ARENA_PASSPHRASE, _make_token, app, battle_limiter, store
 
 
 def _auth_cookies() -> dict[str, str]:
@@ -48,6 +48,9 @@ async def client():
 
     original_path = store.db_path
     store.db_path = tempfile.mktemp(suffix=".db")
+    # Reset the in-memory rate limiter so per-test POST counts don't collide
+    # across the suite (all tests share the same "unknown" client IP).
+    battle_limiter.requests.clear()
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -430,3 +433,83 @@ async def test_battle_page_invalid_id(client, auth_headers_get):
 async def test_leaderboard_page(client, auth_headers_get):
     resp = await client.get("/leaderboard", headers=auth_headers_get)
     assert resp.status_code == 200
+
+
+# --- Permalink (GET /api/battle/{id}) ---
+
+
+@pytest.mark.asyncio
+async def test_get_battle_invalid_id_format(client, auth_headers_get):
+    resp = await client.get("/api/battle/bad!", headers=auth_headers_get)
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_get_battle_nonexistent(client, auth_headers_get):
+    resp = await client.get("/api/battle/abcdefghij123456", headers=auth_headers_get)
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_battle_unvoted_returns_404(client, auth_headers, auth_headers_get):
+    """A battle without a vote isn't a valid permalink target — never leak in-flight state."""
+    create_resp = await client.post(
+        "/api/battle",
+        json={"prompt": "unvoted", "category": "general"},
+        headers=auth_headers,
+    )
+    battle_id = create_resp.json()["battle_id"]
+
+    resp = await client.get(f"/api/battle/{battle_id}", headers=auth_headers_get)
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_battle_voted_returns_full_reveal(client, auth_headers, auth_headers_get):
+    """A voted battle round-trips to a fully-populated reveal payload."""
+    create_resp = await client.post(
+        "/api/battle",
+        json={"prompt": "explain closures", "category": "coding"},
+        headers=auth_headers,
+    )
+    battle_id = create_resp.json()["battle_id"]
+
+    await store.update_response_a(battle_id, "response from A", 500, 100, 0.003)
+    await store.update_response_b(battle_id, "response from B", 700, 150, 0.005)
+
+    vote_resp = await client.post(
+        f"/api/battle/{battle_id}/vote",
+        json={"winner": "a"},
+        headers=auth_headers,
+    )
+    assert vote_resp.status_code == 200
+
+    resp = await client.get(f"/api/battle/{battle_id}", headers=auth_headers_get)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["id"] == battle_id
+    assert data["prompt"] == "explain closures"
+    assert data["category"] == "coding"
+    assert data["response_a"] == "response from A"
+    assert data["response_b"] == "response from B"
+    assert data["winner"] == "a"
+    assert data["latency_a_ms"] == 500
+    assert data["latency_b_ms"] == 700
+    assert data["tokens_a"] == 100
+    assert data["tokens_b"] == 150
+    assert data["cost_a"] == 0.003
+    assert data["cost_b"] == 0.005
+    assert data["model_a_name"] and data["model_b_name"]
+    assert data["model_a_provider"] and data["model_b_provider"]
+    # ELO deltas — must be populated because record_vote just wrote vote_log
+    assert data["rating_a_before"] == 1500.0
+    assert data["rating_b_before"] == 1500.0
+    assert data["rating_a_after"] > 1500.0
+    assert data["rating_b_after"] < 1500.0
+
+
+@pytest.mark.asyncio
+async def test_get_battle_requires_auth(client):
+    resp = await client.get("/api/battle/abcdefghij123456")
+    assert resp.status_code == 401

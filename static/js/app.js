@@ -4,7 +4,7 @@ import { $, $$, state } from './state.js';
 import { initTheme, toggleTheme } from './theme.js';
 import { setupTemplates } from './templates.js';
 import { loadLeaderboard, exportData } from './leaderboard.js';
-import { startBattle, submitVote } from './battle.js';
+import { startBattle, submitVote, loadPermalink } from './battle.js';
 
 // --- Stats ---
 
@@ -109,8 +109,25 @@ function setupButtonGroup(groupId, callback) {
 
 // --- Router ---
 
-function route() {
+const BATTLE_PATH_RE = /^\/battle\/([a-zA-Z0-9]{16})$/;
+
+async function route() {
     const path = location.pathname;
+    const match = path.match(BATTLE_PATH_RE);
+    if (match) {
+        const battleId = match[1];
+        // If we're returning from a fresh vote in this tab, currentBattleId
+        // matches and the reveal view is already populated — don't refetch.
+        if (state.currentBattleId === battleId && !$('#reveal-view').classList.contains('hidden')) {
+            return;
+        }
+        const ok = await loadPermalink(battleId);
+        if (!ok) {
+            history.replaceState(null, '', '/');
+            showView('arena');
+        }
+        return;
+    }
     if (path === '/leaderboard') {
         showView('leaderboard');
     } else {
@@ -150,6 +167,25 @@ document.addEventListener('DOMContentLoaded', () => {
     $$('.vote-btn').forEach(btn => {
         btn.addEventListener('click', () => submitVote(btn.dataset.vote));
     });
+
+    // Share button — copies the current battle permalink
+    const shareBtn = $('#share-btn');
+    if (shareBtn) {
+        shareBtn.addEventListener('click', async () => {
+            if (!state.currentBattleId) return;
+            const url = `${location.origin}/battle/${state.currentBattleId}`;
+            const label = shareBtn.querySelector('.share-btn-text');
+            const original = label.textContent;
+            try {
+                await navigator.clipboard.writeText(url);
+                label.textContent = 'COPIED';
+            } catch (err) {
+                // Fallback for insecure contexts / older browsers.
+                window.prompt('Copy this link:', url);
+            }
+            setTimeout(() => { label.textContent = original; }, 1500);
+        });
+    }
 
     // Theme toggle
     $('#theme-toggle').addEventListener('click', toggleTheme);
