@@ -62,6 +62,57 @@ def estimate_cost(model: Model, config: Config, input_tokens: int, output_tokens
     return input_cost + output_cost + provider.request_surcharge
 
 
+async def run_battle_headless(config: Config, store, battle_id: str) -> dict:
+    """Run both model calls to completion without streaming and persist results.
+
+    Returns ``{"a": {...}, "b": {...}}`` where each side has response, latency_ms,
+    tokens, cost. Sides with an error carry ``{"error": "..."}`` and no other keys.
+    Used by the suite runner where SSE isn't wanted.
+    """
+    battle = await store.get_battle(battle_id)
+    if not battle:
+        raise ValueError("battle not found")
+    model_a = config.get_model(battle["model_a"])
+    model_b = config.get_model(battle["model_b"])
+    if not model_a or not model_b:
+        raise ValueError("model not found in config")
+
+    prompt = battle["prompt"]
+    messages = [{"role": "user", "content": prompt}]
+
+    async def _one(model: Model, side: str) -> dict:
+        client = get_client(config, model)
+        provider = config.get_provider(model.provider_name)
+        timeout_s = provider.timeout or 60
+        start = time.monotonic()
+        try:
+            resp = await client.chat.completions.create(
+                model=model.model_id,
+                messages=messages,
+                max_tokens=2048,
+                timeout=timeout_s,
+            )
+        except Exception as e:
+            return {"error": str(e)}
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        text = (resp.choices[0].message.content or "") if resp.choices else ""
+        usage = getattr(resp, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", 0) or int(len(prompt.split()) * 1.3)
+        completion_tokens = getattr(usage, "completion_tokens", 0) or int(len(text.split()) * 1.3)
+        cost = estimate_cost(model, config, prompt_tokens, completion_tokens)
+        update = store.update_response_a if side == "a" else store.update_response_b
+        await update(battle_id, text, elapsed_ms, completion_tokens, round(cost, 6))
+        return {
+            "response": text,
+            "latency_ms": elapsed_ms,
+            "tokens": completion_tokens,
+            "cost": round(cost, 6),
+        }
+
+    result_a, result_b = await asyncio.gather(_one(model_a, "a"), _one(model_b, "b"))
+    return {"a": result_a, "b": result_b}
+
+
 async def stream_battle(config: Config, store, battle_id: str):
     """Generator that yields SSE events for both model responses."""
     battle = await store.get_battle(battle_id)

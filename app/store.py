@@ -43,6 +43,30 @@ CREATE TABLE IF NOT EXISTS ratings (
     PRIMARY KEY (model_id, category)
 );
 
+CREATE TABLE IF NOT EXISTS suite_runs (
+    id TEXT PRIMARY KEY,
+    suite_name TEXT NOT NULL,
+    started_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    finished_at DATETIME,
+    status TEXT NOT NULL DEFAULT 'running',
+    battles_total INTEGER NOT NULL,
+    battles_completed INTEGER NOT NULL DEFAULT 0,
+    battles_errored INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0.0
+);
+
+CREATE TABLE IF NOT EXISTS suite_battles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    prompt_id TEXT NOT NULL,
+    battle_id TEXT,
+    winner TEXT,
+    error TEXT,
+    FOREIGN KEY (run_id) REFERENCES suite_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_suite_battles_run ON suite_battles(run_id);
+
 CREATE TABLE IF NOT EXISTS vote_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     battle_id TEXT NOT NULL,
@@ -273,6 +297,99 @@ class Store:
             "SELECT id, prompt, category, model_a, model_b, winner, "
             "latency_a_ms, latency_b_ms, tokens_a, tokens_b, cost_a, cost_b, "
             "created_at, voted_at FROM battles WHERE winner IS NOT NULL ORDER BY created_at DESC"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    # --- Suite runs ---
+
+    async def create_suite_run(self, suite_name: str, battles_total: int) -> str:
+        run_id = _gen_id()
+        await self.db.execute(
+            "INSERT INTO suite_runs (id, suite_name, battles_total) VALUES (?, ?, ?)",
+            (run_id, suite_name, battles_total),
+        )
+        await self.db.commit()
+        return run_id
+
+    async def record_suite_battle(
+        self,
+        run_id: str,
+        prompt_id: str,
+        battle_id: str | None,
+        winner: str | None,
+        error: str | None,
+    ) -> None:
+        await self.db.execute(
+            "INSERT INTO suite_battles (run_id, prompt_id, battle_id, winner, error) VALUES (?, ?, ?, ?, ?)",
+            (run_id, prompt_id, battle_id, winner, error),
+        )
+        if error:
+            await self.db.execute(
+                "UPDATE suite_runs SET battles_errored = battles_errored + 1 WHERE id = ?",
+                (run_id,),
+            )
+        else:
+            await self.db.execute(
+                "UPDATE suite_runs SET battles_completed = battles_completed + 1 WHERE id = ?",
+                (run_id,),
+            )
+        await self.db.commit()
+
+    async def finish_suite_run(self, run_id: str, status: str, total_cost: float) -> None:
+        await self.db.execute(
+            "UPDATE suite_runs SET finished_at = datetime('now'), status = ?, total_cost = ? WHERE id = ?",
+            (status, total_cost, run_id),
+        )
+        await self.db.commit()
+
+    async def get_suite_run(self, run_id: str) -> dict | None:
+        cursor = await self.db.execute("SELECT * FROM suite_runs WHERE id = ?", (run_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        run = dict(row)
+
+        # Join to per-battle results, aggregate wins-per-model.
+        cursor = await self.db.execute(
+            "SELECT sb.prompt_id, sb.battle_id, sb.winner, sb.error, "
+            "b.model_a, b.model_b, b.cost_a, b.cost_b "
+            "FROM suite_battles sb LEFT JOIN battles b ON sb.battle_id = b.id "
+            "WHERE sb.run_id = ? ORDER BY sb.id",
+            (run_id,),
+        )
+        rows = await cursor.fetchall()
+        battles = [dict(r) for r in rows]
+
+        tally: dict[str, dict] = {}
+        for b in battles:
+            for side in ("a", "b"):
+                model = b[f"model_{side}"]
+                if not model:
+                    continue
+                if model not in tally:
+                    tally[model] = {"wins": 0, "losses": 0, "ties": 0, "battles": 0}
+                tally[model]["battles"] += 1
+            if b["winner"] == "a":
+                tally[b["model_a"]]["wins"] += 1
+                tally[b["model_b"]]["losses"] += 1
+            elif b["winner"] == "b":
+                tally[b["model_b"]]["wins"] += 1
+                tally[b["model_a"]]["losses"] += 1
+            elif b["winner"] == "tie":
+                tally[b["model_a"]]["ties"] += 1
+                tally[b["model_b"]]["ties"] += 1
+
+        run["battles"] = battles
+        run["tally"] = tally
+        return run
+
+    async def list_suite_runs(self, suite_name: str, limit: int = 20) -> list[dict]:
+        cursor = await self.db.execute(
+            "SELECT id, suite_name, started_at, finished_at, status, "
+            "battles_total, battles_completed, battles_errored, total_cost "
+            "FROM suite_runs WHERE suite_name = ? ORDER BY started_at DESC LIMIT ?",
+            (suite_name, limit),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]

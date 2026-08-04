@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import hmac
 import io
@@ -15,13 +16,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .arena import select_models, stream_battle
+from .arena import estimate_cost, get_client, run_battle_headless, select_models, stream_battle  # noqa: F401
 from .auth import bearer_from_request_headers, bearer_matches, load_api_tokens, make_token
 from .config import load_config
 from .judge import JudgeError, run_judge
 from .models import BattleRequest, VoteRequest
 from .ratelimit import RateLimiter
 from .store import Store
+from .suites import load_suites
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
@@ -31,6 +33,7 @@ logging.basicConfig(
 log = logging.getLogger("arena")
 
 config = load_config()
+suites = load_suites()
 store = Store()
 battle_limiter = RateLimiter(max_requests=10, window_seconds=60)
 
@@ -456,6 +459,141 @@ async def list_models():
     return [{"id": m.id, "display_name": m.display_name, "categories": m.categories} for m in config.enabled_models()]
 
 
+async def _run_suite(run_id: str, suite_name: str) -> None:
+    """Background task: run every prompt in a suite, judge, tally.
+
+    Sequential (not parallel) so slow providers don't stampede rate limits.
+    Errors on individual prompts are recorded but don't abort the run.
+    """
+    suite = suites.get(suite_name)
+    if not suite:
+        await store.finish_suite_run(run_id, "errored", 0.0)
+        return
+
+    judge_model = config.judge_model()
+    total_cost = 0.0
+    status = "completed"
+
+    for prompt in suite.prompts:
+        try:
+            model_a, model_b = select_models(config, suite.category)
+        except ValueError as e:
+            await store.record_suite_battle(run_id, prompt.id, None, None, str(e))
+            continue
+
+        battle_id = await store.create_battle(prompt.prompt, suite.category, model_a.id, model_b.id)
+        try:
+            results = await run_battle_headless(config, store, battle_id)
+        except Exception as e:
+            log.exception("suite %s prompt %s: battle failed", suite_name, prompt.id)
+            await store.record_suite_battle(run_id, prompt.id, battle_id, None, f"battle: {e}")
+            continue
+
+        err_a = results["a"].get("error")
+        err_b = results["b"].get("error")
+        if err_a or err_b:
+            msg = f"a: {err_a}" if err_a else ""
+            msg += (" | " if err_a and err_b else "") + (f"b: {err_b}" if err_b else "")
+            await store.record_suite_battle(run_id, prompt.id, battle_id, None, msg)
+            continue
+
+        total_cost += results["a"]["cost"] + results["b"]["cost"]
+
+        if not judge_model or not config.judge:
+            # No judge → skip the vote, record the battle unfinished. Operator
+            # can still vote manually later; the suite run just carries no
+            # winner for this prompt.
+            await store.record_suite_battle(run_id, prompt.id, battle_id, None, "no judge configured")
+            continue
+
+        try:
+            verdict = await run_judge(
+                config,
+                config.judge,
+                judge_model,
+                prompt.prompt,
+                results["a"]["response"],
+                results["b"]["response"],
+            )
+            total_cost += verdict["cost"]
+        except JudgeError as e:
+            await store.record_suite_battle(run_id, prompt.id, battle_id, None, f"judge: {e}")
+            continue
+
+        try:
+            await store.record_vote(
+                battle_id,
+                verdict["winner"],
+                method="judge",
+                judge_reasoning=verdict["reasoning"],
+                judge_model_id=verdict["judge_model_id"],
+                judge_cost=verdict["cost"],
+            )
+        except ValueError as e:
+            await store.record_suite_battle(run_id, prompt.id, battle_id, None, f"vote: {e}")
+            continue
+
+        await store.record_suite_battle(run_id, prompt.id, battle_id, verdict["winner"], None)
+
+    await store.finish_suite_run(run_id, status, total_cost)
+    log.info("suite %s run %s done: $%.4f", suite_name, run_id, total_cost)
+
+
+@app.get("/api/suites")
+async def list_suites_route():
+    """List all suites the server picked up at startup."""
+    return [
+        {
+            "name": s.name,
+            "description": s.description,
+            "category": s.category,
+            "prompt_count": len(s.prompts),
+        }
+        for s in suites.values()
+    ]
+
+
+@app.get("/api/suites/{name}")
+async def get_suite_route(name: str):
+    suite = suites.get(name)
+    if not suite:
+        raise HTTPException(404, f"suite not found: {name}")
+    return {
+        "name": suite.name,
+        "description": suite.description,
+        "category": suite.category,
+        "prompts": [{"id": p.id, "prompt": p.prompt} for p in suite.prompts],
+    }
+
+
+@app.post("/api/suites/{name}/run")
+async def run_suite_route(name: str):
+    """Kick off a background run of the named suite; returns a run_id to poll."""
+    suite = suites.get(name)
+    if not suite:
+        raise HTTPException(404, f"suite not found: {name}")
+    if not config.judge_model():
+        raise HTTPException(400, "suite runs require a configured judge (see models.yaml)")
+    run_id = await store.create_suite_run(name, len(suite.prompts))
+    asyncio.create_task(_run_suite(run_id, name))
+    return {"run_id": run_id, "battles_total": len(suite.prompts), "status": "running"}
+
+
+@app.get("/api/suites/{name}/runs")
+async def list_suite_runs_route(name: str):
+    if name not in suites:
+        raise HTTPException(404, f"suite not found: {name}")
+    return await store.list_suite_runs(name)
+
+
+@app.get("/api/suites/runs/{run_id}")
+async def get_suite_run_route(run_id: str):
+    run = await store.get_suite_run(run_id)
+    if not run:
+        raise HTTPException(404, "run not found")
+    return run
+
+
 @app.get("/api/features")
 async def features():
     """Publish server-side feature flags so the frontend can render conditionally."""
@@ -465,6 +603,10 @@ async def features():
             "enabled": judge_model is not None,
             "model_id": judge_model.id if judge_model else None,
             "display_name": judge_model.display_name if judge_model else None,
+        },
+        "suites": {
+            "enabled": len(suites) > 0,
+            "count": len(suites),
         },
     }
 

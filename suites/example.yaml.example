@@ -1,0 +1,21 @@
+name: example
+description: |
+  Rename this file to example.yaml (or something more descriptive) and edit
+  the prompts to match your team's real work.
+category: general
+prompts:
+  - id: summarize-changelog
+    prompt: |
+      Summarize this changelog entry for a non-technical stakeholder in 2 sentences:
+
+      "Migrated the primary write path from SQLite to Postgres to unblock
+      horizontal scaling. Read replicas now serve ~85% of read traffic;
+      p99 read latency dropped 40ms."
+  - id: bug-triage
+    prompt: |
+      A user reports: "the export button downloads an empty CSV about 1 in 10
+      times." Write a 3-step debugging plan.
+  - id: explain-concept
+    prompt: |
+      Explain what "backpressure" means in a streaming system, in one paragraph,
+      to someone who understands HTTP but not distributed systems.

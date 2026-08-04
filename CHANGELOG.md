@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Eval suites.** YAML-defined prompt sets under `suites/` become the
+  codified evals a team runs on demand. `GET /api/suites` lists them,
+  `POST /api/suites/{name}/run` kicks off a background run that fires
+  one battle per prompt, uses the configured judge to cast the vote
+  automatically, and records aggregate results (per-run tally,
+  per-battle rows, total cost, error surface) under a `run_id`.
+  `GET /api/suites/runs/{run_id}` returns the full run detail for
+  polling. Two new tables (`suite_runs`, `suite_battles`) added via the
+  same additive-migration path used for the judge columns. New
+  `app/suites.py` loader with strict validation (unique prompt IDs,
+  required fields, one suite per file). New `run_battle_headless()` in
+  `app/arena.py` so the runner reuses the exact same call/persist logic
+  as the streaming path. Suite runs REQUIRE a configured judge
+  (`400` otherwise) — the whole point is codified, hands-off eval.
+  16 new tests; suite goes from 124 to 140. `suites/README.md` +
+  `suites/example.yaml.example` document the format.
 - **LLM-as-judge.** Optional `judge:` section in `models.yaml` designates
   any configured model as an automated evaluator. A "let \<judge\> decide"
   button appears in the battle view once both responses arrive; new

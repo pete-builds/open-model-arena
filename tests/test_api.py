@@ -1,5 +1,6 @@
 """API endpoint tests using FastAPI TestClient."""
 
+import asyncio
 import os
 
 import pytest
@@ -693,6 +694,145 @@ async def test_judge_endpoint_409_when_already_voted(client, auth_headers, monke
 
     resp = await client.post(f"/api/battle/{battle_id}/judge", headers=auth_headers)
     assert resp.status_code == 409
+
+
+# --- Suites ---
+
+
+@pytest.mark.asyncio
+async def test_list_suites_empty_by_default(client, auth_headers_get):
+    from app import main
+
+    # example config doesn't ship a suites dir loaded in tests
+    resp = await client.get("/api/suites", headers=auth_headers_get)
+    assert resp.status_code == 200
+    # Loaded once at import time — assertion is about API shape, not contents.
+    assert isinstance(resp.json(), list)
+    assert isinstance(main.suites, dict)
+
+
+@pytest.mark.asyncio
+async def test_get_suite_404_for_unknown(client, auth_headers_get, monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main, "suites", {})
+    resp = await client.get("/api/suites/nope", headers=auth_headers_get)
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_run_suite_400_without_judge(client, auth_headers, monkeypatch):
+    from app import main
+    from app.suites import Suite, SuitePrompt
+
+    monkeypatch.setattr(
+        main,
+        "suites",
+        {"tiny": Suite(name="tiny", description="", category="general", prompts=[SuitePrompt(id="p", prompt="q")])},
+    )
+    monkeypatch.setattr(main.config, "judge", None, raising=False)
+    resp = await client.post("/api/suites/tiny/run", headers=auth_headers)
+    assert resp.status_code == 400
+    assert "judge" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_suite_end_to_end(client, auth_headers, auth_headers_get, monkeypatch):
+    """Full suite: kick off, poll until done, verify tally."""
+    from app import main
+    from app.config import Judge, Model
+    from app.suites import Suite, SuitePrompt
+
+    # Two-prompt suite
+    suite = Suite(
+        name="mini",
+        description="",
+        category="general",
+        prompts=[SuitePrompt(id="p1", prompt="Q1?"), SuitePrompt(id="p2", prompt="Q2?")],
+    )
+    monkeypatch.setattr(main, "suites", {"mini": suite})
+
+    # Configure a fake judge
+    judge_model = Model(
+        id="fake-suite-judge",
+        provider_name=next(iter(main.config.providers)),
+        display_name="Suite Judge",
+        model_id="fake",
+        input_cost_per_1m=0.0,
+        output_cost_per_1m=0.0,
+    )
+    monkeypatch.setattr(main.config, "models", main.config.models + [judge_model], raising=False)
+    monkeypatch.setattr(main.config, "judge", Judge(model_id="fake-suite-judge"), raising=False)
+
+    # Fake the actual model calls
+    async def fake_run_battle_headless(cfg, st, battle_id):
+        return {
+            "a": {"response": "A ans", "latency_ms": 100, "tokens": 20, "cost": 0.001},
+            "b": {"response": "B ans", "latency_ms": 120, "tokens": 22, "cost": 0.002},
+        }
+
+    async def fake_run_judge(*args, **kwargs):
+        return {
+            "winner": "a",
+            "reasoning": "A wins",
+            "latency_ms": 40,
+            "prompt_tokens": 50,
+            "completion_tokens": 10,
+            "cost": 0.0005,
+            "judge_model_id": "fake-suite-judge",
+            "judge_display_name": "Suite Judge",
+        }
+
+    monkeypatch.setattr(main, "run_battle_headless", fake_run_battle_headless)
+    monkeypatch.setattr(main, "run_judge", fake_run_judge)
+
+    # Kick off the run
+    resp = await client.post("/api/suites/mini/run", headers=auth_headers)
+    assert resp.status_code == 200
+    run_id = resp.json()["run_id"]
+    assert resp.json()["battles_total"] == 2
+
+    # Poll — background task should finish fast in tests
+    for _ in range(50):
+        detail = await client.get(f"/api/suites/runs/{run_id}", headers=auth_headers_get)
+        if detail.json().get("status") == "completed":
+            break
+        await asyncio.sleep(0.02)
+    else:
+        pytest.fail(f"suite run did not complete in time; last state: {detail.json()}")
+
+    data = detail.json()
+    assert data["status"] == "completed"
+    assert data["battles_completed"] == 2
+    assert data["battles_errored"] == 0
+    # 2 battles × (0.001 + 0.002) + 2 judges × 0.0005 = 0.007
+    assert data["total_cost"] == pytest.approx(0.007, abs=1e-6)
+    assert len(data["battles"]) == 2
+    assert all(b["winner"] == "a" for b in data["battles"])
+    # Tally should show at least two entries with "a"-side model winning both.
+    assert data["tally"]  # non-empty
+
+
+@pytest.mark.asyncio
+async def test_list_suite_runs(client, auth_headers_get, monkeypatch):
+    from app import main
+    from app.suites import Suite, SuitePrompt
+
+    monkeypatch.setattr(
+        main,
+        "suites",
+        {"foo": Suite(name="foo", description="", category="general", prompts=[SuitePrompt(id="p", prompt="q")])},
+    )
+    # No runs yet
+    resp = await client.get("/api/suites/foo/runs", headers=auth_headers_get)
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_suite_runs_404_unknown_run(client, auth_headers_get):
+    resp = await client.get("/api/suites/runs/abcdefghij123456", headers=auth_headers_get)
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
