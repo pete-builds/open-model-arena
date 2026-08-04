@@ -1,3 +1,62 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-model-arena"
+version = "0.1.0"
+description = "Blind, cost-aware model comparison for any OpenAI-compatible endpoint. Self-hosted. ELO leaderboard. Live streaming."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+authors = [{ name = "Pete Stergion" }]
+keywords = [
+    "llm",
+    "evaluation",
+    "arena",
+    "elo",
+    "self-hosted",
+    "ollama",
+    "openai-compatible",
+    "homelab",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "fastapi==0.140.13",
+    "uvicorn[standard]==0.52.0",
+    "openai==2.50.0",
+    "aiosqlite==0.22.1",
+    "pyyaml==6.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "httpx==0.28.1",
+    "ruff==0.16.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/pete-builds/open-model-arena"
+Repository = "https://github.com/pete-builds/open-model-arena"
+Issues = "https://github.com/pete-builds/open-model-arena/issues"
+Changelog = "https://github.com/pete-builds/open-model-arena/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

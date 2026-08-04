@@ -7,6 +7,13 @@ TEAMS-MESSAGE.md
 PROJECT-SUMMARY.md
 private/
 .venv/
+.venv-test/
 .coverage
+coverage.xml
 htmlcov/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
