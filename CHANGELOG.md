@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Docs site.** New Astro + Starlight site under `docs/site/`, published
+  to <https://pete-builds.github.io/open-model-arena/> via a `docs.yml`
+  workflow on every `main` push that touches `docs/site/**`. Ships pages
+  for: getting started, eval suites, LLM-as-judge, headless API,
+  deployment (Docker + Caddy/nginx/Cloudflare/Tailscale), API reference,
+  architecture, ELO math (formula + K + concurrency fix), threat model,
+  and metrics (counter catalog + sample alerts).
 - **Prometheus `/api/metrics` + `/api/costs` dashboard.** New
   `prometheus-client` dep exposes battle-lifecycle counters
   (`arena_battles_started_total`, `arena_votes_total` split by method +

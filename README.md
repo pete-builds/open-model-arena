@@ -3,10 +3,13 @@
 > Blind, cost-aware model comparison for any OpenAI-compatible endpoint. Self-hosted. ELO leaderboard. Live streaming.
 
 [![CI](https://github.com/pete-builds/open-model-arena/actions/workflows/ci.yml/badge.svg)](https://github.com/pete-builds/open-model-arena/actions/workflows/ci.yml)
+[![Docs](https://github.com/pete-builds/open-model-arena/actions/workflows/docs.yml/badge.svg)](https://pete-builds.github.io/open-model-arena/)
 [![Release](https://img.shields.io/github/v/release/pete-builds/open-model-arena?display_name=tag&sort=semver)](https://github.com/pete-builds/open-model-arena/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Container](https://img.shields.io/badge/ghcr.io-open--model--arena-blue?logo=docker)](https://github.com/pete-builds/open-model-arena/pkgs/container/open-model-arena)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
+
+📖 **[Read the docs](https://pete-builds.github.io/open-model-arena/)** for guides on eval suites, LLM-as-judge, headless API, deployment, and the threat model.
 
 **Bring your own models. Run blind battles.**
 
