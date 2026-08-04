@@ -301,6 +301,65 @@ class Store:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
+    # --- Cost breakdown ---
+
+    async def get_cost_breakdown(self, days: int) -> list[dict]:
+        """Sum per-model cost + token usage over the last N days.
+
+        Rows are (model_id, total_cost, total_output_tokens, battles). Costs
+        come from the ``cost_a``/``cost_b`` columns, which use real API usage
+        numbers when the provider returns them (see arena.call_model).
+        Judge cost is folded in via ``vote_log.judge_cost`` and attributed to
+        the judge model.
+        """
+        window = f"-{int(days)} days"
+        cursor = await self.db.execute(
+            "SELECT model_id, SUM(cost) AS total_cost, "
+            "SUM(tokens) AS total_output_tokens, COUNT(*) AS battles FROM ("
+            "  SELECT model_a AS model_id, cost_a AS cost, tokens_a AS tokens "
+            "    FROM battles WHERE created_at >= datetime('now', ?) "
+            "  UNION ALL "
+            "  SELECT model_b AS model_id, cost_b AS cost, tokens_b AS tokens "
+            "    FROM battles WHERE created_at >= datetime('now', ?) "
+            ") GROUP BY model_id",
+            (window, window),
+        )
+        rows = await cursor.fetchall()
+        result = [dict(r) for r in rows]
+
+        # Judge cost — attribute to the judge model.
+        judge_cursor = await self.db.execute(
+            "SELECT judge_model_id AS model_id, SUM(judge_cost) AS judge_cost, "
+            "COUNT(*) AS judgments FROM vote_log "
+            "WHERE method = 'judge' AND created_at >= datetime('now', ?) "
+            "AND judge_model_id IS NOT NULL GROUP BY judge_model_id",
+            (window,),
+        )
+        judge_rows = {r["model_id"]: dict(r) for r in await judge_cursor.fetchall()}
+
+        # Merge judge cost into the per-model rows (adds a row if the judge
+        # never itself competed as an A/B model).
+        by_model = {r["model_id"]: r for r in result}
+        for mid, jrow in judge_rows.items():
+            if mid in by_model:
+                by_model[mid]["total_cost"] = (by_model[mid]["total_cost"] or 0) + (jrow["judge_cost"] or 0)
+                by_model[mid]["judgments"] = jrow["judgments"]
+            else:
+                by_model[mid] = {
+                    "model_id": mid,
+                    "total_cost": jrow["judge_cost"] or 0,
+                    "total_output_tokens": 0,
+                    "battles": 0,
+                    "judgments": jrow["judgments"],
+                }
+
+        for r in by_model.values():
+            r["total_cost"] = round(r["total_cost"] or 0, 6)
+            r["total_output_tokens"] = int(r["total_output_tokens"] or 0)
+            r.setdefault("judgments", 0)
+
+        return list(by_model.values())
+
     # --- Suite runs ---
 
     async def create_suite_run(self, suite_name: str, battles_total: int) -> str:

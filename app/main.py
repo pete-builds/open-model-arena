@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel as PydanticBaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -20,6 +21,12 @@ from .arena import estimate_cost, get_client, run_battle_headless, select_models
 from .auth import bearer_from_request_headers, bearer_matches, load_api_tokens, make_token
 from .config import load_config
 from .judge import JudgeError, run_judge
+from .metrics import (
+    record_battle_started,
+    record_suite_run_completed,
+    record_suite_run_started,
+    record_vote,
+)
 from .models import BattleRequest, VoteRequest
 from .ratelimit import RateLimiter
 from .store import Store
@@ -203,6 +210,7 @@ async def create_battle(req: BattleRequest, request: Request):
             raise HTTPException(400, str(e))
 
     battle_id = await store.create_battle(req.prompt, req.category, model_a.id, model_b.id)
+    record_battle_started(req.category)
     return {"battle_id": battle_id}
 
 
@@ -237,7 +245,9 @@ async def vote(battle_id: str, req: VoteRequest):
     try:
         elo_results = await store.record_vote(battle_id, req.winner)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
+
+    record_vote("human", req.winner)
 
     # Reveal model identities
     model_a = config.get_model(battle["model_a"])
@@ -355,6 +365,8 @@ async def judge_battle(battle_id: str):
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+
+    record_vote("judge", verdict["winner"], judge_model_id=verdict["judge_model_id"], judge_cost=verdict["cost"])
 
     model_a = config.get_model(battle["model_a"])
     model_b = config.get_model(battle["model_b"])
@@ -536,6 +548,7 @@ async def _run_suite(run_id: str, suite_name: str) -> None:
         await store.record_suite_battle(run_id, prompt.id, battle_id, verdict["winner"], None)
 
     await store.finish_suite_run(run_id, status, total_cost)
+    record_suite_run_completed(suite_name)
     log.info("suite %s run %s done: $%.4f", suite_name, run_id, total_cost)
 
 
@@ -575,6 +588,7 @@ async def run_suite_route(name: str):
     if not config.judge_model():
         raise HTTPException(400, "suite runs require a configured judge (see models.yaml)")
     run_id = await store.create_suite_run(name, len(suite.prompts))
+    record_suite_run_started(name)
     asyncio.create_task(_run_suite(run_id, name))
     return {"run_id": run_id, "battles_total": len(suite.prompts), "status": "running"}
 
@@ -592,6 +606,55 @@ async def get_suite_run_route(run_id: str):
     if not run:
         raise HTTPException(404, "run not found")
     return run
+
+
+@app.get("/api/metrics")
+async def prometheus_metrics():
+    """Prometheus scrape endpoint. Gated by the standard bearer/cookie auth.
+
+    Configure Prometheus with:
+
+        scrape_configs:
+          - job_name: model-arena
+            metrics_path: /api/metrics
+            authorization:
+              type: Bearer
+              credentials_file: /etc/prometheus/arena-token
+            static_configs:
+              - targets: ['arena.example:3694']
+    """
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/api/costs")
+async def cost_dashboard(days: int = 30):
+    """Per-model cost breakdown over the last N days.
+
+    Sums `cost_a` and `cost_b` from `battles` (which use real API usage
+    numbers when the provider returns them), joins to model display names,
+    and derives cost-per-1k-output-tokens per model from measured data —
+    the audit-of-record answer to "which model is actually cheapest for us."
+    """
+    if days < 1 or days > 3650:
+        raise HTTPException(400, "days must be between 1 and 3650")
+
+    breakdown = await store.get_cost_breakdown(days)
+    total = sum(row["total_cost"] for row in breakdown)
+    for row in breakdown:
+        model = config.get_model(row["model_id"])
+        row["display_name"] = model.display_name if model else row["model_id"]
+        row["provider"] = model.provider_name if model else "unknown"
+        # Measured cost per 1k output tokens (using real API usage numbers):
+        row["measured_cost_per_1k_output_tokens"] = (
+            round((row["total_cost"] / row["total_output_tokens"]) * 1000, 6) if row["total_output_tokens"] else None
+        )
+        row["share_pct"] = round((row["total_cost"] / total) * 100, 1) if total else 0
+
+    return {
+        "window_days": days,
+        "total_cost": round(total, 4),
+        "per_model": sorted(breakdown, key=lambda r: r["total_cost"], reverse=True),
+    }
 
 
 @app.get("/api/features")

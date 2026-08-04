@@ -3,6 +3,7 @@ uvicorn[standard]==0.52.0
 openai==2.50.0
 aiosqlite==0.22.1
 pyyaml==6.0.3
+prometheus-client==0.22.0
 
 # Testing
 pytest==9.1.1

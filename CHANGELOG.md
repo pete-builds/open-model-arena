@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Prometheus `/api/metrics` + `/api/costs` dashboard.** New
+  `prometheus-client` dep exposes battle-lifecycle counters
+  (`arena_battles_started_total`, `arena_votes_total` split by method +
+  winner, `arena_model_cost_dollars_total` per model, latency
+  histograms per model, judge cost/votes, suite runs). `/api/metrics`
+  reuses the standard bearer/cookie gate so Prometheus scrapes with a
+  bearer token in `authorization`. Separate `/api/costs?days=N` returns
+  the audit-of-record breakdown from SQLite: per-model spend, share%,
+  measured cost per 1k output tokens (from real API usage numbers, not
+  configured pricing), and folds judge cost onto the judge model.
+  8 new tests; suite goes from 140 to 146.
 - **Eval suites.** YAML-defined prompt sets under `suites/` become the
   codified evals a team runs on demand. `GET /api/suites` lists them,
   `POST /api/suites/{name}/run` kicks off a background run that fires

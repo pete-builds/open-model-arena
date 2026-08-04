@@ -862,3 +862,95 @@ async def test_judge_endpoint_400_when_responses_missing(client, auth_headers, m
     resp = await client.post(f"/api/battle/{battle_id}/judge", headers=auth_headers)
     assert resp.status_code == 400
     assert "both responses" in resp.json()["detail"]
+
+
+# --- Metrics + cost dashboard ---
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_returns_prometheus_format(client, auth_headers_get):
+    resp = await client.get("/api/metrics", headers=auth_headers_get)
+    assert resp.status_code == 200
+    body = resp.text
+    # Prometheus text format — at least the well-known counters we defined
+    assert "arena_battles_started_total" in body
+    assert "arena_votes_total" in body
+    assert "arena_model_cost_dollars_total" in body
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_requires_auth(client):
+    resp = await client.get("/api/metrics", follow_redirects=False)
+    # Cookie auth would redirect; API auth returns 401. Either is "denied".
+    assert resp.status_code in (307, 401)
+
+
+@pytest.mark.asyncio
+async def test_costs_endpoint_empty(client, auth_headers_get):
+    resp = await client.get("/api/costs", headers=auth_headers_get)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["window_days"] == 30
+    assert data["total_cost"] == 0
+    assert data["per_model"] == []
+
+
+@pytest.mark.asyncio
+async def test_costs_endpoint_after_battle(client, auth_headers, auth_headers_get):
+    """Costs aggregate per model with measured per-1k-token normalization."""
+    create_resp = await client.post(
+        "/api/battle",
+        json={"prompt": "q", "category": "general"},
+        headers=auth_headers,
+    )
+    battle_id = create_resp.json()["battle_id"]
+    await store.update_response_a(battle_id, "a", 300, 200, 0.01)
+    await store.update_response_b(battle_id, "b", 400, 400, 0.02)
+    # Vote so both battles/logs exist for the timeframe
+    await client.post(f"/api/battle/{battle_id}/vote", json={"winner": "a"}, headers=auth_headers)
+
+    resp = await client.get("/api/costs?days=7", headers=auth_headers_get)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_cost"] == pytest.approx(0.03, abs=1e-6)
+    # Two distinct models each with battles
+    assert len(data["per_model"]) == 2
+    for row in data["per_model"]:
+        assert "measured_cost_per_1k_output_tokens" in row
+        assert "share_pct" in row
+        assert row["battles"] == 1
+
+
+@pytest.mark.asyncio
+async def test_costs_rejects_bad_window(client, auth_headers_get):
+    resp = await client.get("/api/costs?days=0", headers=auth_headers_get)
+    assert resp.status_code == 400
+    resp = await client.get("/api/costs?days=100000", headers=auth_headers_get)
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_metrics_records_battle_created(client, auth_headers, auth_headers_get):
+    """Creating a battle bumps the arena_battles_started_total counter."""
+    # Grab the current value first
+    before_resp = await client.get("/api/metrics", headers=auth_headers_get)
+    before = before_resp.text
+
+    await client.post(
+        "/api/battle",
+        json={"prompt": "metric-check", "category": "general"},
+        headers=auth_headers,
+    )
+
+    after_resp = await client.get("/api/metrics", headers=auth_headers_get)
+    after = after_resp.text
+
+    # The general counter must exist in "after" and have a strictly larger value
+    def _counter_val(text: str, name: str) -> float:
+        for line in text.splitlines():
+            if line.startswith(name) and not line.startswith("#"):
+                return float(line.rsplit(" ", 1)[1])
+        return 0.0
+
+    label = 'arena_battles_started_total{category="general"}'
+    assert _counter_val(after, label) > _counter_val(before, label)
