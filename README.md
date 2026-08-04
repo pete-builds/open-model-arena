@@ -1,6 +1,12 @@
 # Open Model Arena
 
-> Compare local and cloud models in a self-hosted arena using blind voting and ELO rankings.
+> Blind, cost-aware model comparison for any OpenAI-compatible endpoint. Self-hosted. ELO leaderboard. Live streaming.
+
+[![CI](https://github.com/pete-builds/open-model-arena/actions/workflows/ci.yml/badge.svg)](https://github.com/pete-builds/open-model-arena/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/pete-builds/open-model-arena?display_name=tag&sort=semver)](https://github.com/pete-builds/open-model-arena/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Container](https://img.shields.io/badge/ghcr.io-open--model--arena-blue?logo=docker)](https://github.com/pete-builds/open-model-arena/pkgs/container/open-model-arena)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 
 **Bring your own models. Run blind battles.**
 
@@ -124,6 +130,26 @@ The app will refuse to start without `ARENA_PASSPHRASE` and `AUTH_TOKEN_SECRET`.
 | `GET` | `/api/models` | List enabled models |
 | `GET` | `/api/export?format=csv` | Download battle history |
 | `GET` | `/healthz` | Health check |
+
+## Roadmap
+
+The next tranche of work is aimed at teams codifying real evals, not just
+running one-off battles. See [`docs/SHOWCASE-PLAN.md`](docs/SHOWCASE-PLAN.md)
+for the full plan. Headline features on deck:
+
+- **Eval suites** — YAML-defined prompt sets, batch runs, suite-scoped leaderboards
+- **LLM-as-judge** — auto-vote using a designated judge model with human override
+- **Cost dashboard** — spend by model, cost-per-ELO-point, cheapest-above-threshold
+- **API tokens** — headless suite runs from CI
+- **Prometheus `/metrics`** — battles, votes, latency, cost
+- **Battle permalinks** — shareable URL for team review
+- **Reasoning-trace toggle** — thinking-model support (R1, o-series, GPT-5.3)
+
+## Contributing + Security
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev loop, PR expectations, test norms
+- [`SECURITY.md`](SECURITY.md) — private advisory flow
+- [`CHANGELOG.md`](CHANGELOG.md) — Keep a Changelog + SemVer
 
 ## Prior Art
 
