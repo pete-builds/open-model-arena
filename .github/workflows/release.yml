@@ -58,7 +58,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Attest build provenance (SLSA v1, cosign keyless)
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/pete-builds/open-model-arena
           subject-digest: ${{ steps.build.outputs.digest }}
