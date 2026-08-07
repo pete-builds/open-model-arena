@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **X-Forwarded-For only trusted from allow-listed proxies.** New
+  `TRUSTED_PROXIES` env var (comma-separated IPs / CIDRs, empty by
+  default) gates which peers may set the client IP via XFF. Without it,
+  a client on the open internet could rotate the header to bypass the
+  10-battles-per-minute limiter — the direct-port deployment shipped
+  with no proxy at all, and the limiter was the only thing between an
+  authenticated caller and unbounded provider spend. `.env.example`
+  documents the setting.
+- **`create_battle` now validates category.** Requests are rejected
+  with 400 unless the requested category is advertised by at least one
+  enabled model, and when both models are supplied explicitly they must
+  each list the category — closes the last leg of the
+  `category='overall'` double-count vector (where the explicit-models
+  path bypassed the category filter in `select_models`) and prevents
+  arbitrary caller strings from polluting the ratings bucket.
 - **Stream endpoint is now idempotent.** `stream_battle` (and
   `run_battle_headless`) atomically claim execution before spending a
   single token upstream. A second stream request for the same battle

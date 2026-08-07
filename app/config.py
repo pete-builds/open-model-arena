@@ -70,6 +70,15 @@ class Config:
             result = [m for m in result if category in m.categories]
         return result
 
+    def known_categories(self) -> set[str]:
+        """Every category that appears on at least one enabled model.
+
+        Used to reject arbitrary caller-supplied category strings at battle
+        creation. 'overall' is intentionally excluded — that's the aggregate
+        ratings bucket, not a battle category.
+        """
+        return {cat for m in self.models if m.enabled for cat in m.categories}
+
     def judge_model(self) -> Model | None:
         """Return the configured judge model, or None if judge is disabled."""
         if not self.judge:

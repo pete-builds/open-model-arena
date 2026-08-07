@@ -275,6 +275,119 @@ async def test_create_battle_uses_forwarded_ip(client, auth_headers):
     assert resp.status_code == 200
 
 
+def _mock_request(peer: str | None, xff: str | None):
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"x-forwarded-for", xff.encode())] if xff else [],
+        "client": (peer, 12345) if peer else None,
+    }
+    return Request(scope)
+
+
+def test_get_client_ip_ignores_xff_from_untrusted_peer(monkeypatch):
+    """Default (no TRUSTED_PROXIES): XFF is ignored, socket peer wins."""
+    from app import main
+
+    monkeypatch.setattr(main, "TRUSTED_PROXIES", [])
+    req = _mock_request(peer="203.0.113.99", xff="1.2.3.4, 5.6.7.8")
+    assert main._get_client_ip(req) == "203.0.113.99"
+
+
+def test_get_client_ip_honors_xff_from_trusted_peer(monkeypatch):
+    """When the peer is in TRUSTED_PROXIES, the first XFF hop is trusted."""
+    import ipaddress
+
+    from app import main
+
+    monkeypatch.setattr(main, "TRUSTED_PROXIES", [ipaddress.ip_network("10.0.0.0/8")])
+    req = _mock_request(peer="10.0.0.5", xff="1.2.3.4, 5.6.7.8")
+    assert main._get_client_ip(req) == "1.2.3.4"
+
+
+def test_get_client_ip_falls_back_when_no_xff_from_trusted_peer(monkeypatch):
+    """Trusted peer with no XFF header: peer is the client."""
+    import ipaddress
+
+    from app import main
+
+    monkeypatch.setattr(main, "TRUSTED_PROXIES", [ipaddress.ip_network("10.0.0.0/8")])
+    req = _mock_request(peer="10.0.0.5", xff=None)
+    assert main._get_client_ip(req) == "10.0.0.5"
+
+
+def test_xff_rate_limit_bypass_defense(monkeypatch):
+    """A client rotating XFF from an untrusted peer must not shake off the limiter."""
+    from app import main
+
+    monkeypatch.setattr(main, "TRUSTED_PROXIES", [])
+    main.battle_limiter.requests.clear()
+
+    for i in range(15):
+        req = _mock_request(peer="203.0.113.42", xff=f"1.2.3.{i}")
+        # Every call, even with a fresh spoofed XFF, keys the same socket peer.
+        main.battle_limiter.is_allowed(main._get_client_ip(req))
+
+    # Same peer keyed 15 times against a 10-request limit → next call blocked.
+    req = _mock_request(peer="203.0.113.42", xff="9.9.9.9")
+    assert main.battle_limiter.is_allowed(main._get_client_ip(req)) is False
+
+
+# --- Category validation ---
+
+
+@pytest.mark.asyncio
+async def test_create_battle_rejects_unknown_category(client, auth_headers):
+    resp = await client.post(
+        "/api/battle",
+        json={"prompt": "test", "category": "definitely-not-a-real-category"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert "unknown category" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_create_battle_rejects_overall_as_category(client, auth_headers):
+    """'overall' is the aggregate bucket, never a per-battle category."""
+    resp = await client.post(
+        "/api/battle",
+        json={"prompt": "test", "category": "overall"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_create_battle_explicit_models_reject_category_they_dont_support(client, auth_headers, monkeypatch):
+    """When both models are named, the category must be advertised by both."""
+    from app import main
+    from app.config import Model
+
+    narrow = Model(
+        id="narrow-model",
+        provider_name=next(iter(main.config.providers)),
+        display_name="Narrow",
+        model_id="narrow",
+        input_cost_per_1m=0.0,
+        output_cost_per_1m=0.0,
+        categories=["general"],
+        enabled=True,
+    )
+    monkeypatch.setattr(main.config, "models", main.config.models + [narrow], raising=False)
+
+    resp = await client.post(
+        "/api/battle",
+        json={"prompt": "test", "category": "coding", "model_a": "narrow-model", "model_b": "gpt-4o"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert "does not support category" in resp.json()["detail"]
+
+
 # --- Battle with specific models ---
 
 
