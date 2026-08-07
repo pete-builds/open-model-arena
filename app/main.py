@@ -4,6 +4,7 @@ import asyncio
 import csv
 import hmac
 import io
+import ipaddress
 import logging
 import os
 import re
@@ -61,6 +62,35 @@ def _make_token(passphrase: str) -> str:
 
 # Bearer tokens for headless / CI use — see app/auth.py for details.
 API_TOKENS = load_api_tokens()
+
+
+def _parse_trusted_proxies(raw: str) -> list[ipaddress._BaseNetwork]:
+    """Parse a comma-separated list of IPs / CIDR blocks into networks.
+
+    Bare IPs are treated as /32 (IPv4) or /128 (IPv6). Malformed entries are
+    skipped with a warning so a fat-fingered value doesn't crash boot; the
+    net effect of a skipped entry is that the peer won't be trusted and its
+    X-Forwarded-For header will be ignored, which is the safe default.
+    """
+    networks: list[ipaddress._BaseNetwork] = []
+    for token in (t.strip() for t in raw.split(",")):
+        if not token:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(token, strict=False))
+        except ValueError as e:
+            log.warning("ignoring malformed TRUSTED_PROXIES entry %r: %s", token, e)
+    return networks
+
+
+# Reverse proxies whose X-Forwarded-For headers we're willing to trust.
+# Empty (default) means: NEVER honor XFF — every request keys off its
+# socket peer, so an untrusted client can't spoof its way past the battle
+# rate limit. Operators fronting the app with Caddy / nginx / Tailscale
+# Funnel should list the proxy's egress IPs or CIDRs here.
+TRUSTED_PROXIES = _parse_trusted_proxies(os.environ.get("TRUSTED_PROXIES", ""))
+if not TRUSTED_PROXIES:
+    log.info("TRUSTED_PROXIES not set; X-Forwarded-For headers will be ignored")
 
 
 # Paths that don't require auth
@@ -175,12 +205,31 @@ def _validate_battle_id(battle_id: str) -> None:
 
 
 def _get_client_ip(request: Request) -> str:
-    """Extract real client IP from X-Forwarded-For (set by Tailscale Funnel), fall back to direct connection."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        # Take the first IP (original client), ignore proxies
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Return the client IP to key rate-limits on.
+
+    X-Forwarded-For is only honored when the direct peer is in TRUSTED_PROXIES.
+    Otherwise a client on the open internet could rotate the header to bypass
+    the per-IP battle rate limit — the direct-port deployment shipped with no
+    reverse proxy at all, and the limiter was the only thing between an
+    authenticated caller and unbounded provider spend.
+    """
+    peer_host = request.client.host if request.client else None
+
+    if peer_host and TRUSTED_PROXIES:
+        try:
+            peer_ip = ipaddress.ip_address(peer_host)
+            if any(peer_ip in net for net in TRUSTED_PROXIES):
+                forwarded = request.headers.get("x-forwarded-for")
+                if forwarded:
+                    # The leftmost IP is the original client; everything after
+                    # is the proxy chain we just verified.
+                    return forwarded.split(",")[0].strip()
+        except ValueError:
+            # Peer host wasn't an IP (unix socket etc.); fall through and key
+            # on the raw peer string below.
+            pass
+
+    return peer_host or "unknown"
 
 
 @app.post("/api/battle")
@@ -194,6 +243,18 @@ async def create_battle(req: BattleRequest, request: Request):
     if len(req.prompt) > 10000:
         raise HTTPException(400, "prompt too long (max 10000 chars)")
 
+    # Reject caller-controlled categories that no enabled model advertises.
+    # The auto-select path already fails on unknown categories via
+    # select_models, but the explicit-models path below skips that check —
+    # so a request could otherwise mint a battle in an arbitrary category
+    # string and pollute the ratings table with a spurious bucket.
+    known = config.known_categories()
+    if req.category not in known:
+        raise HTTPException(
+            400,
+            f"unknown category '{req.category}'; must be one of: {', '.join(sorted(known)) or '(none configured)'}",
+        )
+
     if req.model_a and req.model_b:
         model_a = config.get_model(req.model_a)
         model_b = config.get_model(req.model_b)
@@ -203,6 +264,12 @@ async def create_battle(req: BattleRequest, request: Request):
             raise HTTPException(400, f"model not found: {req.model_b}")
         if req.model_a == req.model_b:
             raise HTTPException(400, "pick two different models")
+        # Both explicit models must actually support the requested category —
+        # otherwise Elo ratings for that category get updated for models that
+        # never competed in it.
+        for m in (model_a, model_b):
+            if req.category not in m.categories:
+                raise HTTPException(400, f"model '{m.id}' does not support category '{req.category}'")
     else:
         try:
             model_a, model_b = select_models(config, req.category)

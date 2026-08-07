@@ -256,3 +256,97 @@ async def test_stream_battle_api_error(test_config, test_store):
     assert "secret-internal-url" not in event_text
     # Should contain the sanitized message
     assert "model call failed" in event_text
+
+
+def _mock_stream_client(chunks, call_counter):
+    """Client whose create() increments a counter each call and yields chunks."""
+
+    async def mock_create(**kwargs):
+        call_counter["n"] += 1
+        mock_stream = AsyncMock()
+        mock_stream.__aiter__ = lambda self: self
+        mock_stream._items = list(chunks)
+
+        async def anext_impl(self):
+            if self._items:
+                return self._items.pop(0)
+            raise StopAsyncIteration
+
+        mock_stream.__anext__ = anext_impl
+        return mock_stream
+
+    client = AsyncMock()
+    client.chat.completions.create = mock_create
+    return client
+
+
+@pytest.mark.asyncio
+async def test_stream_battle_replays_on_second_call(test_config, test_store):
+    """Second stream request for a completed battle replays; no new model calls."""
+    battle_id = await test_store.create_battle("Hi", "general", "model-alpha", "model-beta")
+
+    usage = MagicMock(prompt_tokens=10, completion_tokens=5)
+    chunks = [_make_mock_chunk(content="stored"), _make_mock_chunk(usage=usage)]
+    counter = {"n": 0}
+    client = _mock_stream_client(chunks, counter)
+
+    with patch("app.arena.get_client", return_value=client):
+        first = await _collect_events(stream_battle(test_config, test_store, battle_id))
+    calls_after_first = counter["n"]
+    assert calls_after_first == 2  # one per side
+
+    # Second request must not hit the model.
+    with patch("app.arena.get_client", return_value=client):
+        second = await _collect_events(stream_battle(test_config, test_store, battle_id))
+
+    assert counter["n"] == calls_after_first, "second stream must not fire new model calls"
+    second_text = "".join(second)
+    assert "replayed" in second_text
+    assert "battle_complete" in second_text
+    # Also assert the first stream really completed (baseline sanity).
+    assert "battle_complete" in "".join(first)
+
+
+@pytest.mark.asyncio
+async def test_stream_battle_concurrent_only_runs_once(test_config, test_store):
+    """Two concurrent stream requests for the same battle fire model calls exactly once."""
+    battle_id = await test_store.create_battle("Hi", "general", "model-alpha", "model-beta")
+
+    usage = MagicMock(prompt_tokens=10, completion_tokens=5)
+    counter = {"n": 0}
+
+    async def mock_create(**kwargs):
+        counter["n"] += 1
+        # Yield slowly so both streams overlap in the queue-draining loop.
+        chunks = [_make_mock_chunk(content="tok"), _make_mock_chunk(usage=usage)]
+        mock_stream = AsyncMock()
+        mock_stream.__aiter__ = lambda self: self
+        mock_stream._items = list(chunks)
+
+        async def anext_impl(self):
+            await asyncio.sleep(0.01)
+            if self._items:
+                return self._items.pop(0)
+            raise StopAsyncIteration
+
+        mock_stream.__anext__ = anext_impl
+        return mock_stream
+
+    client = AsyncMock()
+    client.chat.completions.create = mock_create
+
+    with patch("app.arena.get_client", return_value=client):
+        r1, r2 = await asyncio.gather(
+            _collect_events(stream_battle(test_config, test_store, battle_id)),
+            _collect_events(stream_battle(test_config, test_store, battle_id)),
+        )
+
+    # Exactly 2 model calls total (one per side, one caller). The loser sees
+    # either the "already streaming" error or a replay if the first completed
+    # before it hit claim_battle_execution; both outcomes leave the counter at 2.
+    assert counter["n"] == 2, f"expected 2 model calls total, got {counter['n']}"
+
+    texts = ["".join(r1), "".join(r2)]
+    # One of the two must be a winning stream (has battle_complete without "replayed").
+    winning = [t for t in texts if "battle_complete" in t and '"replayed": true' not in t]
+    assert len(winning) == 1, f"expected exactly one non-replayed winner, got {len(winning)}"
