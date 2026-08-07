@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import string
@@ -89,7 +90,17 @@ _ADDITIVE_COLUMNS = [
     ("vote_log", "judge_reasoning", "TEXT"),
     ("vote_log", "judge_model_id", "TEXT"),
     ("vote_log", "judge_cost", "REAL"),
+    ("battles", "execution_state", "TEXT"),
 ]
+
+# execution_state values on the battles row:
+#   NULL / 'pending' → never streamed, safe to claim
+#   'running'        → a stream_battle call holds the claim
+#   'complete'       → both responses persisted, stream may replay them
+#   'error'          → a prior stream failed; do not restream (operator only)
+EXEC_STATE_RUNNING = "running"
+EXEC_STATE_COMPLETE = "complete"
+EXEC_STATE_ERROR = "error"
 
 
 def _gen_id(length: int = 16) -> str:
@@ -101,11 +112,18 @@ class Store:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
         self.db: aiosqlite.Connection | None = None
+        # All writes and read-modify-write transactions serialize on this lock.
+        # The Store shares a single aiosqlite connection across coroutines, so
+        # any commit() on it flushes every pending statement — including work
+        # begun by another coroutine. Serializing keeps transaction boundaries
+        # honest and matches SQLite's single-writer semantics.
+        self._write_lock: asyncio.Lock | None = None
 
     async def connect(self):
         try:
             self.db = await aiosqlite.connect(self.db_path)
             self.db.row_factory = aiosqlite.Row
+            self._write_lock = asyncio.Lock()
             await self.db.execute("PRAGMA journal_mode=WAL")
             await self.db.executescript(SCHEMA)
             for table, column, spec in _ADDITIVE_COLUMNS:
@@ -116,6 +134,15 @@ class Store:
                     # prior boot. SQLite has no ADD COLUMN IF NOT EXISTS.
                     if "duplicate column" not in str(e).lower():
                         raise
+            # Backfill execution_state for battles that already have responses
+            # persisted from before this column existed, so a first stream
+            # request post-upgrade doesn't reclaim + rerun a completed battle.
+            await self.db.execute(
+                "UPDATE battles SET execution_state = ? "
+                "WHERE execution_state IS NULL "
+                "AND (COALESCE(response_a, '') != '' OR COALESCE(response_b, '') != '')",
+                (EXEC_STATE_COMPLETE,),
+            )
             await self.db.commit()
             log.info("database connected: %s", self.db_path)
         except Exception as e:
@@ -127,11 +154,12 @@ class Store:
 
     async def create_battle(self, prompt: str, category: str, model_a: str, model_b: str) -> str:
         battle_id = _gen_id()
-        await self.db.execute(
-            "INSERT INTO battles (id, prompt, category, model_a, model_b) VALUES (?, ?, ?, ?, ?)",
-            (battle_id, prompt, category, model_a, model_b),
-        )
-        await self.db.commit()
+        async with self._write_lock:
+            await self.db.execute(
+                "INSERT INTO battles (id, prompt, category, model_a, model_b) VALUES (?, ?, ?, ?, ?)",
+                (battle_id, prompt, category, model_a, model_b),
+            )
+            await self.db.commit()
         return battle_id
 
     async def get_battle(self, battle_id: str) -> dict | None:
@@ -142,18 +170,63 @@ class Store:
         return dict(row)
 
     async def update_response_a(self, battle_id: str, response: str, latency_ms: int, tokens: int, cost: float):
-        await self.db.execute(
-            "UPDATE battles SET response_a = ?, latency_a_ms = ?, tokens_a = ?, cost_a = ? WHERE id = ?",
-            (response, latency_ms, tokens, cost, battle_id),
-        )
-        await self.db.commit()
+        async with self._write_lock:
+            await self.db.execute(
+                "UPDATE battles SET response_a = ?, latency_a_ms = ?, tokens_a = ?, cost_a = ? WHERE id = ?",
+                (response, latency_ms, tokens, cost, battle_id),
+            )
+            await self.db.commit()
 
     async def update_response_b(self, battle_id: str, response: str, latency_ms: int, tokens: int, cost: float):
-        await self.db.execute(
-            "UPDATE battles SET response_b = ?, latency_b_ms = ?, tokens_b = ?, cost_b = ? WHERE id = ?",
-            (response, latency_ms, tokens, cost, battle_id),
+        async with self._write_lock:
+            await self.db.execute(
+                "UPDATE battles SET response_b = ?, latency_b_ms = ?, tokens_b = ?, cost_b = ? WHERE id = ?",
+                (response, latency_ms, tokens, cost, battle_id),
+            )
+            await self.db.commit()
+
+    async def claim_battle_execution(self, battle_id: str) -> tuple[bool, str | None]:
+        """Atomically transition a battle from pending → running.
+
+        Returns ``(claimed, current_state)``. ``claimed`` is True only when
+        this call flipped the row from pending to running; the caller then owns
+        execution. When False, ``current_state`` reflects why the claim was
+        refused ('running', 'complete', 'error', or 'voted').
+        """
+        async with self._write_lock:
+            cursor = await self.db.execute(
+                "UPDATE battles SET execution_state = ? "
+                "WHERE id = ? "
+                "AND (execution_state IS NULL OR execution_state = 'pending') "
+                "AND winner IS NULL",
+                (EXEC_STATE_RUNNING, battle_id),
+            )
+            if cursor.rowcount == 1:
+                await self.db.commit()
+                return True, EXEC_STATE_RUNNING
+            await self.db.commit()
+        # Not claimable — figure out why so the caller can pick a response.
+        cursor = await self.db.execute(
+            "SELECT execution_state, winner FROM battles WHERE id = ?",
+            (battle_id,),
         )
-        await self.db.commit()
+        row = await cursor.fetchone()
+        if not row:
+            return False, None
+        if row["winner"] is not None:
+            return False, "voted"
+        return False, row["execution_state"]
+
+    async def mark_battle_execution(self, battle_id: str, state: str) -> None:
+        """Record the outcome of a claimed execution (complete or error)."""
+        if state not in (EXEC_STATE_COMPLETE, EXEC_STATE_ERROR):
+            raise ValueError(f"invalid execution state: {state}")
+        async with self._write_lock:
+            await self.db.execute(
+                "UPDATE battles SET execution_state = ? WHERE id = ?",
+                (state, battle_id),
+            )
+            await self.db.commit()
 
     async def record_vote(
         self,
@@ -164,82 +237,94 @@ class Store:
         judge_model_id: str | None = None,
         judge_cost: float | None = None,
     ) -> dict:
+        # Existence check outside the lock is a fast-path; the real check
+        # happens inside the transaction below via the conditional UPDATE.
         battle = await self.get_battle(battle_id)
         if not battle:
             raise ValueError("battle not found")
 
-        # Atomically claim the vote up front. This conditional UPDATE only
-        # succeeds for the first caller (winner IS NULL); concurrent callers
-        # interleaving at the await boundaries below will see rowcount == 0 and
-        # bail, so the Elo update + vote_log insert run exactly once per battle.
-        cursor = await self.db.execute(
-            "UPDATE battles SET winner = ?, voted_at = datetime('now') WHERE id = ? AND winner IS NULL",
-            (winner, battle_id),
-        )
-        if cursor.rowcount == 0:
-            raise ValueError("already voted")
-
         model_a = battle["model_a"]
         model_b = battle["model_b"]
+        # Overall + the battle's own category. dedup so that when a battle is
+        # created with category='overall' we only update once — otherwise the
+        # loop below would double-apply the Elo delta and the win/loss counter.
+        categories = list(dict.fromkeys(["overall", battle["category"]]))
+        results: dict = {}
 
-        # Get or create ratings for both models (overall + category)
-        categories = ["overall", battle["category"]]
-        results = {}
+        async with self._write_lock:
+            # Explicit transaction: the claim, Elo updates, and vote_log insert
+            # must land together, and we need a rollback path if anything below
+            # fails so partial state doesn't leak out via a later commit.
+            await self.db.execute("BEGIN IMMEDIATE")
+            try:
+                # Atomically claim the vote up front. Conditional UPDATE only
+                # succeeds for the first caller (winner IS NULL); concurrent
+                # callers see rowcount == 0 and bail with 'already voted'.
+                cursor = await self.db.execute(
+                    "UPDATE battles SET winner = ?, voted_at = datetime('now') WHERE id = ? AND winner IS NULL",
+                    (winner, battle_id),
+                )
+                if cursor.rowcount == 0:
+                    await self.db.rollback()
+                    raise ValueError("already voted")
 
-        for cat in categories:
-            rating_a = await self._get_or_create_rating(model_a, cat)
-            rating_b = await self._get_or_create_rating(model_b, cat)
+                for cat in categories:
+                    rating_a = await self._get_or_create_rating(model_a, cat)
+                    rating_b = await self._get_or_create_rating(model_b, cat)
 
-            new_a, new_b = _update_elo(rating_a, rating_b, winner)
+                    new_a, new_b = _update_elo(rating_a, rating_b, winner)
 
-            # Update ratings
-            _update_sql = (
-                "UPDATE ratings SET rating = ?, {stat} = {stat} + 1,"
-                " updated_at = datetime('now') WHERE model_id = ? AND category = ?"
-            )
-            if winner == "a":
-                await self.db.execute(_update_sql.format(stat="wins"), (new_a, model_a, cat))
-                await self.db.execute(_update_sql.format(stat="losses"), (new_b, model_b, cat))
-            elif winner == "b":
-                await self.db.execute(_update_sql.format(stat="losses"), (new_a, model_a, cat))
-                await self.db.execute(_update_sql.format(stat="wins"), (new_b, model_b, cat))
-            else:  # tie
-                await self.db.execute(_update_sql.format(stat="ties"), (new_a, model_a, cat))
-                await self.db.execute(_update_sql.format(stat="ties"), (new_b, model_b, cat))
+                    _update_sql = (
+                        "UPDATE ratings SET rating = ?, {stat} = {stat} + 1,"
+                        " updated_at = datetime('now') WHERE model_id = ? AND category = ?"
+                    )
+                    if winner == "a":
+                        await self.db.execute(_update_sql.format(stat="wins"), (new_a, model_a, cat))
+                        await self.db.execute(_update_sql.format(stat="losses"), (new_b, model_b, cat))
+                    elif winner == "b":
+                        await self.db.execute(_update_sql.format(stat="losses"), (new_a, model_a, cat))
+                        await self.db.execute(_update_sql.format(stat="wins"), (new_b, model_b, cat))
+                    else:  # tie
+                        await self.db.execute(_update_sql.format(stat="ties"), (new_a, model_a, cat))
+                        await self.db.execute(_update_sql.format(stat="ties"), (new_b, model_b, cat))
 
-            if cat == "overall":
-                results = {
-                    "rating_a_before": rating_a,
-                    "rating_b_before": rating_b,
-                    "rating_a_after": new_a,
-                    "rating_b_after": new_b,
-                }
+                    if cat == "overall":
+                        results = {
+                            "rating_a_before": rating_a,
+                            "rating_b_before": rating_b,
+                            "rating_a_after": new_a,
+                            "rating_b_after": new_b,
+                        }
 
-        # Log vote
-        await self.db.execute(
-            "INSERT INTO vote_log (battle_id, model_a, model_b, winner,"
-            " rating_a_before, rating_b_before, rating_a_after, rating_b_after,"
-            " method, judge_reasoning, judge_model_id, judge_cost)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                battle_id,
-                model_a,
-                model_b,
-                winner,
-                results["rating_a_before"],
-                results["rating_b_before"],
-                results["rating_a_after"],
-                results["rating_b_after"],
-                method,
-                judge_reasoning,
-                judge_model_id,
-                judge_cost,
-            ),
-        )
-
-        # Single commit: the claim above plus the Elo updates and vote_log
-        # insert all land atomically.
-        await self.db.commit()
+                await self.db.execute(
+                    "INSERT INTO vote_log (battle_id, model_a, model_b, winner,"
+                    " rating_a_before, rating_b_before, rating_a_after, rating_b_after,"
+                    " method, judge_reasoning, judge_model_id, judge_cost)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        battle_id,
+                        model_a,
+                        model_b,
+                        winner,
+                        results["rating_a_before"],
+                        results["rating_b_before"],
+                        results["rating_a_after"],
+                        results["rating_b_after"],
+                        method,
+                        judge_reasoning,
+                        judge_model_id,
+                        judge_cost,
+                    ),
+                )
+                await self.db.commit()
+            except Exception:
+                # aiosqlite treats rollback on a non-active transaction as a
+                # no-op error; swallow it so we can re-raise the original.
+                try:
+                    await self.db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
 
         return results
 
@@ -364,11 +449,12 @@ class Store:
 
     async def create_suite_run(self, suite_name: str, battles_total: int) -> str:
         run_id = _gen_id()
-        await self.db.execute(
-            "INSERT INTO suite_runs (id, suite_name, battles_total) VALUES (?, ?, ?)",
-            (run_id, suite_name, battles_total),
-        )
-        await self.db.commit()
+        async with self._write_lock:
+            await self.db.execute(
+                "INSERT INTO suite_runs (id, suite_name, battles_total) VALUES (?, ?, ?)",
+                (run_id, suite_name, battles_total),
+            )
+            await self.db.commit()
         return run_id
 
     async def record_suite_battle(
@@ -379,28 +465,30 @@ class Store:
         winner: str | None,
         error: str | None,
     ) -> None:
-        await self.db.execute(
-            "INSERT INTO suite_battles (run_id, prompt_id, battle_id, winner, error) VALUES (?, ?, ?, ?, ?)",
-            (run_id, prompt_id, battle_id, winner, error),
-        )
-        if error:
+        async with self._write_lock:
             await self.db.execute(
-                "UPDATE suite_runs SET battles_errored = battles_errored + 1 WHERE id = ?",
-                (run_id,),
+                "INSERT INTO suite_battles (run_id, prompt_id, battle_id, winner, error) VALUES (?, ?, ?, ?, ?)",
+                (run_id, prompt_id, battle_id, winner, error),
             )
-        else:
-            await self.db.execute(
-                "UPDATE suite_runs SET battles_completed = battles_completed + 1 WHERE id = ?",
-                (run_id,),
-            )
-        await self.db.commit()
+            if error:
+                await self.db.execute(
+                    "UPDATE suite_runs SET battles_errored = battles_errored + 1 WHERE id = ?",
+                    (run_id,),
+                )
+            else:
+                await self.db.execute(
+                    "UPDATE suite_runs SET battles_completed = battles_completed + 1 WHERE id = ?",
+                    (run_id,),
+                )
+            await self.db.commit()
 
     async def finish_suite_run(self, run_id: str, status: str, total_cost: float) -> None:
-        await self.db.execute(
-            "UPDATE suite_runs SET finished_at = datetime('now'), status = ?, total_cost = ? WHERE id = ?",
-            (status, total_cost, run_id),
-        )
-        await self.db.commit()
+        async with self._write_lock:
+            await self.db.execute(
+                "UPDATE suite_runs SET finished_at = datetime('now'), status = ?, total_cost = ? WHERE id = ?",
+                (status, total_cost, run_id),
+            )
+            await self.db.commit()
 
     async def get_suite_run(self, run_id: str) -> dict | None:
         cursor = await self.db.execute("SELECT * FROM suite_runs WHERE id = ?", (run_id,))

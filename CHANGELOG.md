@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Stream endpoint is now idempotent.** `stream_battle` (and
+  `run_battle_headless`) atomically claim execution before spending a
+  single token upstream. A second stream request for the same battle
+  replays the stored responses over SSE instead of firing fresh model
+  calls — closes an unbounded-paid-call vector where a client retry,
+  reconnect, or manual replay could multiply provider spend against an
+  already-recorded battle. New `execution_state` column on `battles`
+  (with a boot-time backfill for pre-upgrade rows carrying responses)
+  drives the claim/complete/error transitions.
+- **Vote transactions are now atomic under concurrency.** The Store's
+  shared aiosqlite connection meant any coroutine's `commit()` flushed
+  every pending statement — a late `update_response_a` could commit
+  another coroutine's half-applied vote before its `vote_log` row
+  landed. `record_vote` now runs inside an explicit `BEGIN IMMEDIATE`
+  / `COMMIT` / `ROLLBACK` block, and every writer serializes on an
+  asyncio lock so concurrent votes across different battles no longer
+  lose Elo updates via read-modify-write interleaving. Regression tests
+  cover both scenarios plus a category=`overall` double-count edge case.
+
 ### Added
 
 - **Auto-deploy pipeline scaffolding.** `release.yml` grew SLSA v1

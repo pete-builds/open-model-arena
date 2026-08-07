@@ -188,3 +188,100 @@ async def test_category_ratings_tracked_separately(test_store):
     # General should be empty (different category)
     general = await test_store.get_leaderboard("general")
     assert len(general) == 0
+
+
+@pytest.mark.asyncio
+async def test_vote_with_overall_category_not_double_counted(test_store):
+    """A battle created with category='overall' must apply exactly one Elo delta."""
+    bid = await test_store.create_battle("q", "overall", "model-alpha", "model-beta")
+    results = await test_store.record_vote(bid, "a")
+
+    # Rating moved once, not twice: a single win at k=32 with equal starting
+    # ratings gives a 16-point swing; a double-apply would land near 32 points.
+    assert abs((results["rating_a_after"] - 1500.0) - 16.0) < 1e-6
+    assert abs((1500.0 - results["rating_b_after"]) - 16.0) < 1e-6
+
+    overall = await test_store.get_leaderboard("overall")
+    winner = next(r for r in overall if r["model_id"] == "model-alpha")
+    loser = next(r for r in overall if r["model_id"] == "model-beta")
+    assert winner["wins"] == 1
+    assert loser["losses"] == 1
+
+
+@pytest.mark.asyncio
+async def test_claim_battle_execution_is_atomic(test_store):
+    """Only one of many concurrent claims wins; the rest report state='running'."""
+    bid = await test_store.create_battle("q", "general", "model-alpha", "model-beta")
+
+    results = await asyncio.gather(*[test_store.claim_battle_execution(bid) for _ in range(5)])
+    claimed = [r for r in results if r[0]]
+    refused = [r for r in results if not r[0]]
+
+    assert len(claimed) == 1
+    assert len(refused) == 4
+    assert all(state == "running" for _, state in refused)
+
+
+@pytest.mark.asyncio
+async def test_claim_battle_execution_refuses_after_complete(test_store):
+    """Once marked complete, a battle cannot be re-claimed for execution."""
+    bid = await test_store.create_battle("q", "general", "model-alpha", "model-beta")
+    claimed, _ = await test_store.claim_battle_execution(bid)
+    assert claimed
+    await test_store.mark_battle_execution(bid, "complete")
+
+    claimed2, state = await test_store.claim_battle_execution(bid)
+    assert not claimed2
+    assert state == "complete"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_votes_across_battles_preserve_ratings(test_store):
+    """Concurrent votes for different battles must not lose Elo updates.
+
+    With a shared aiosqlite connection and no locking, RMW rating updates
+    interleave: two votes both read 1500, both compute 1516/1484, and the
+    second write clobbers the first. Serializing writes fixes this — the
+    second vote reads the post-first-vote rating and stacks the delta.
+    """
+    # Two battles, same models, both voted for "a".
+    bids = [await test_store.create_battle(f"q{i}", "general", "model-alpha", "model-beta") for i in range(2)]
+
+    await asyncio.gather(*[test_store.record_vote(bid, "a") for bid in bids])
+
+    board = {r["model_id"]: r for r in await test_store.get_leaderboard("overall")}
+    # Two wins for alpha, two losses for beta, both counters exactly right.
+    assert board["model-alpha"]["wins"] == 2
+    assert board["model-alpha"]["losses"] == 0
+    assert board["model-beta"]["wins"] == 0
+    assert board["model-beta"]["losses"] == 2
+    # Two stacked +16 deltas would land near 1531.5 (second delta is slightly
+    # smaller because the expected score shifts). A single interleaved delta
+    # would leave alpha at 1516 — well below the >1520 floor asserted here.
+    assert board["model-alpha"]["rating"] > 1520.0
+    assert board["model-beta"]["rating"] < 1480.0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_update_and_vote_are_isolated(test_store):
+    """A late update_response_a racing with record_vote must not corrupt vote_log."""
+    bid = await test_store.create_battle("q", "general", "model-alpha", "model-beta")
+    await test_store.update_response_a(bid, "A initial", 100, 10, 0.001)
+    await test_store.update_response_b(bid, "B initial", 100, 10, 0.001)
+
+    # Fire a vote and a stream-late response update at the same time. Without
+    # a write lock the update's commit() could flush the vote's partial state.
+    await asyncio.gather(
+        test_store.record_vote(bid, "a"),
+        test_store.update_response_a(bid, "A late", 200, 20, 0.002),
+    )
+
+    # Exactly one vote_log row exists for this battle regardless of ordering.
+    cursor = await test_store.db.execute("SELECT COUNT(*) AS c FROM vote_log WHERE battle_id = ?", (bid,))
+    assert (await cursor.fetchone())["c"] == 1
+
+    battle = await test_store.get_battle(bid)
+    assert battle["winner"] == "a"
+    # Elo delta is consistent with a single "a" win at 1500 vs 1500.
+    log = await test_store.get_vote_log(bid)
+    assert abs((log["rating_a_after"] - 1500.0) - 16.0) < 1e-6

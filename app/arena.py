@@ -9,6 +9,7 @@ import time
 from openai import AsyncOpenAI
 
 from .config import Config, Model
+from .store import EXEC_STATE_COMPLETE, EXEC_STATE_ERROR
 
 
 def select_models(config: Config, category: str) -> tuple[Model, Model]:
@@ -68,6 +69,10 @@ async def run_battle_headless(config: Config, store, battle_id: str) -> dict:
     Returns ``{"a": {...}, "b": {...}}`` where each side has response, latency_ms,
     tokens, cost. Sides with an error carry ``{"error": "..."}`` and no other keys.
     Used by the suite runner where SSE isn't wanted.
+
+    Idempotent: claims execution before firing model calls. If the battle
+    already ran (or is running elsewhere), raises ValueError instead of
+    re-issuing paid requests.
     """
     battle = await store.get_battle(battle_id)
     if not battle:
@@ -76,6 +81,10 @@ async def run_battle_headless(config: Config, store, battle_id: str) -> dict:
     model_b = config.get_model(battle["model_b"])
     if not model_a or not model_b:
         raise ValueError("model not found in config")
+
+    claimed, state = await store.claim_battle_execution(battle_id)
+    if not claimed:
+        raise ValueError(f"battle not claimable for execution (state={state})")
 
     prompt = battle["prompt"]
     messages = [{"role": "user", "content": prompt}]
@@ -109,12 +118,38 @@ async def run_battle_headless(config: Config, store, battle_id: str) -> dict:
             "cost": round(cost, 6),
         }
 
-    result_a, result_b = await asyncio.gather(_one(model_a, "a"), _one(model_b, "b"))
+    try:
+        result_a, result_b = await asyncio.gather(_one(model_a, "a"), _one(model_b, "b"))
+    except Exception:
+        await store.mark_battle_execution(battle_id, EXEC_STATE_ERROR)
+        raise
+
+    terminal = EXEC_STATE_ERROR if (result_a.get("error") or result_b.get("error")) else EXEC_STATE_COMPLETE
+    await store.mark_battle_execution(battle_id, terminal)
     return {"a": result_a, "b": result_b}
 
 
+def _replay_side_event(battle: dict, side: str) -> str:
+    """Build a *_done SSE event from responses already persisted on the row."""
+    label = "model_a" if side == "a" else "model_b"
+    payload = {
+        "response": battle[f"response_{side}"] or "",
+        "latency_ms": battle[f"latency_{side}_ms"] or 0,
+        "tokens": battle[f"tokens_{side}"] or 0,
+        "cost": battle[f"cost_{side}"] or 0.0,
+        "replayed": True,
+    }
+    return f"event: {label}_done\ndata: {json.dumps(payload)}\n\n"
+
+
 async def stream_battle(config: Config, store, battle_id: str):
-    """Generator that yields SSE events for both model responses."""
+    """Generator that yields SSE events for both model responses.
+
+    Idempotent: a battle can only be executed once. Concurrent stream requests
+    for the same battle_id do not multiply paid provider calls — the first
+    caller claims execution, subsequent callers either replay the stored
+    responses (if execution already completed) or receive an error event.
+    """
     battle = await store.get_battle(battle_id)
     if not battle:
         yield f"event: error\ndata: {json.dumps({'error': 'battle not found'})}\n\n"
@@ -125,6 +160,29 @@ async def stream_battle(config: Config, store, battle_id: str):
 
     if not model_a or not model_b:
         yield f"event: error\ndata: {json.dumps({'error': 'model not found in config'})}\n\n"
+        return
+
+    # Atomically claim execution before spending a single token upstream. If we
+    # can't claim, the battle is running elsewhere, already completed, already
+    # voted, or previously errored — none of those should trigger fresh calls.
+    claimed, state = await store.claim_battle_execution(battle_id)
+    if not claimed:
+        if state == "complete":
+            fresh = await store.get_battle(battle_id)
+            if fresh:
+                yield _replay_side_event(fresh, "a")
+                yield _replay_side_event(fresh, "b")
+                yield f"event: battle_complete\ndata: {json.dumps({'battle_id': battle_id, 'replayed': True})}\n\n"
+                return
+        if state == "running":
+            msg = "battle is already streaming"
+        elif state == "voted":
+            msg = "battle already voted"
+        elif state == "error":
+            msg = "previous stream errored; battle cannot be replayed"
+        else:
+            msg = "battle not available for streaming"
+        yield f"event: error\ndata: {json.dumps({'error': msg})}\n\n"
         return
 
     client_a = get_client(config, model_a)
@@ -203,35 +261,46 @@ async def stream_battle(config: Config, store, battle_id: str):
 
     done_a = False
     done_b = False
+    errored = False
 
-    while not (done_a and done_b):
-        # Check both queues with a small timeout
-        for side, label in [("a", "model_a"), ("b", "model_b")]:
-            if (side == "a" and done_a) or (side == "b" and done_b):
-                continue
-            try:
-                msg_type, data = queues[side].get_nowait()
-                if msg_type == "token":
-                    yield f"event: {label}\ndata: {json.dumps({'token': data})}\n\n"
-                elif msg_type == "error":
-                    yield f"event: {label}_error\ndata: {json.dumps({'error': data})}\n\n"
-                    if side == "a":
-                        done_a = True
-                    else:
-                        done_b = True
-                elif msg_type == "done":
-                    yield f"event: {label}_done\ndata: {json.dumps(results[side])}\n\n"
-                    if side == "a":
-                        done_a = True
-                    else:
-                        done_b = True
-            except asyncio.QueueEmpty:
-                pass
+    try:
+        while not (done_a and done_b):
+            # Check both queues with a small timeout
+            for side, label in [("a", "model_a"), ("b", "model_b")]:
+                if (side == "a" and done_a) or (side == "b" and done_b):
+                    continue
+                try:
+                    msg_type, data = queues[side].get_nowait()
+                    if msg_type == "token":
+                        yield f"event: {label}\ndata: {json.dumps({'token': data})}\n\n"
+                    elif msg_type == "error":
+                        errored = True
+                        yield f"event: {label}_error\ndata: {json.dumps({'error': data})}\n\n"
+                        if side == "a":
+                            done_a = True
+                        else:
+                            done_b = True
+                    elif msg_type == "done":
+                        yield f"event: {label}_done\ndata: {json.dumps(results[side])}\n\n"
+                        if side == "a":
+                            done_a = True
+                        else:
+                            done_b = True
+                except asyncio.QueueEmpty:
+                    pass
 
-        if not (done_a and done_b):
-            await asyncio.sleep(0.02)
+            if not (done_a and done_b):
+                await asyncio.sleep(0.02)
 
-    await task_a
-    await task_b
+        await task_a
+        await task_b
 
-    yield f"event: battle_complete\ndata: {json.dumps({'battle_id': battle_id})}\n\n"
+        yield f"event: battle_complete\ndata: {json.dumps({'battle_id': battle_id})}\n\n"
+    finally:
+        # Always release the execution claim so the row does not sit in
+        # 'running' forever if the client disconnects mid-stream.
+        try:
+            terminal = EXEC_STATE_ERROR if errored else EXEC_STATE_COMPLETE
+            await store.mark_battle_execution(battle_id, terminal)
+        except Exception:
+            logging.getLogger("arena").exception("failed to mark battle %s terminal execution state", battle_id)
