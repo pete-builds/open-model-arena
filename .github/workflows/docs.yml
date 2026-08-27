@@ -28,7 +28,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Astro 7 refuses to build on anything below 22.12.0 and exits 1, so
+          # Node 20 here failed the build before it ever reached the upload
+          # step, and the Pages deploy was skipped every run.
+          node-version: "22"
 
       - name: Install
         run: |
