@@ -33,7 +33,7 @@ classifiers = [
 dependencies = [
     "fastapi==0.141.1",
     "uvicorn[standard]==0.52.4",
-    "openai==3.3.1",
+    "openai==3.6.0",
     "aiosqlite==0.22.1",
     "pyyaml==6.0.3",
 ]
@@ -44,7 +44,7 @@ dev = [
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
     "httpx==0.28.1",
-    "ruff==0.16.4",
+    "ruff==0.16.5",
 ]
 
 [project.urls]
