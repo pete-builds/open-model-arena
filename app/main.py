@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import csv
 import hmac
 import io
-import ipaddress
 import logging
 import os
 import re
@@ -18,20 +16,16 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel as PydanticBaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .arena import estimate_cost, get_client, run_battle_headless, select_models, stream_battle  # noqa: F401
+from . import routes_polls, routes_suites
+from .arena import normalize_reasoning_effort, pick_opponent, select_models, stream_battle
 from .auth import bearer_from_request_headers, bearer_matches, load_api_tokens, make_token
-from .config import load_config
+from .clientip import TRUSTED_PROXIES, get_client_ip  # noqa: F401  (re-exported for operators + tests)
+from .config import REASONING_EFFORTS
 from .judge import JudgeError, run_judge
-from .metrics import (
-    record_battle_started,
-    record_suite_run_completed,
-    record_suite_run_started,
-    record_vote,
-)
+from .metrics import record_battle_started, record_vote
 from .models import BattleRequest, VoteRequest
-from .ratelimit import RateLimiter
-from .store import Store
-from .suites import load_suites
+from .payloads import parse_tally, reveal_payload
+from .runtime import battle_limiter, config, store, suites  # noqa: F401  (shared singletons)
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
@@ -39,11 +33,6 @@ logging.basicConfig(
     level=logging.INFO,
 )
 log = logging.getLogger("arena")
-
-config = load_config()
-suites = load_suites()
-store = Store()
-battle_limiter = RateLimiter(max_requests=10, window_seconds=60)
 
 # Auth config — refuse to start with defaults
 ARENA_PASSPHRASE = os.environ.get("ARENA_PASSPHRASE", "")
@@ -53,6 +42,14 @@ if not ARENA_PASSPHRASE or not AUTH_TOKEN_SECRET:
     raise SystemExit(
         "FATAL: ARENA_PASSPHRASE and AUTH_TOKEN_SECRET must be set in environment. See .env.example for details."
     )
+
+# Cookies carry the Secure flag by default, which is right behind any TLS
+# terminator (Caddy, nginx, a Tailscale Funnel). On a plain-HTTP LAN port the
+# browser then drops the cookie and login silently loops, so operators can
+# turn the flag off with COOKIE_SECURE=false. Never do that on a public host.
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").strip().lower() not in ("0", "false", "no", "off")
+if not COOKIE_SECURE:
+    log.warning("COOKIE_SECURE=false: auth cookies will be sent over plain HTTP")
 
 
 def _make_token(passphrase: str) -> str:
@@ -64,37 +61,12 @@ def _make_token(passphrase: str) -> str:
 API_TOKENS = load_api_tokens()
 
 
-def _parse_trusted_proxies(raw: str) -> list[ipaddress._BaseNetwork]:
-    """Parse a comma-separated list of IPs / CIDR blocks into networks.
-
-    Bare IPs are treated as /32 (IPv4) or /128 (IPv6). Malformed entries are
-    skipped with a warning so a fat-fingered value doesn't crash boot; the
-    net effect of a skipped entry is that the peer won't be trusted and its
-    X-Forwarded-For header will be ignored, which is the safe default.
-    """
-    networks: list[ipaddress._BaseNetwork] = []
-    for token in (t.strip() for t in raw.split(",")):
-        if not token:
-            continue
-        try:
-            networks.append(ipaddress.ip_network(token, strict=False))
-        except ValueError as e:
-            log.warning("ignoring malformed TRUSTED_PROXIES entry %r: %s", token, e)
-    return networks
-
-
-# Reverse proxies whose X-Forwarded-For headers we're willing to trust.
-# Empty (default) means: NEVER honor XFF — every request keys off its
-# socket peer, so an untrusted client can't spoof its way past the battle
-# rate limit. Operators fronting the app with Caddy / nginx / Tailscale
-# Funnel should list the proxy's egress IPs or CIDRs here.
-TRUSTED_PROXIES = _parse_trusted_proxies(os.environ.get("TRUSTED_PROXIES", ""))
-if not TRUSTED_PROXIES:
-    log.info("TRUSTED_PROXIES not set; X-Forwarded-For headers will be ignored")
-
-
 # Paths that don't require auth
 PUBLIC_PATHS = {"/login", "/api/login", "/login.html", "/healthz"}
+# Audience-side poll surface: students on their phones never hold the
+# passphrase. Nothing under these prefixes can create a battle or reach a
+# model provider — see app/routes_polls.py.
+PUBLIC_PREFIXES = ("/api/audience/", "/vote/")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -102,7 +74,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # Allow public paths and static assets for login page
-        if path in PUBLIC_PATHS or path.endswith((".css", ".js", ".woff2", ".ico", ".svg")):
+        if (
+            path in PUBLIC_PATHS
+            or path.startswith(PUBLIC_PREFIXES)
+            or path.endswith((".css", ".js", ".woff2", ".ico", ".svg"))
+        ):
             return await call_next(request)
 
         # Bearer-token path: headless / CI clients scoped to /api/*. Bearer
@@ -171,7 +147,7 @@ async def login(req: LoginRequest):
         value=token,
         max_age=7 * 24 * 3600,  # 7 days
         httponly=True,
-        secure=True,
+        secure=COOKIE_SECURE,
         samesite="lax",
     )
     response.set_cookie(
@@ -179,7 +155,7 @@ async def login(req: LoginRequest):
         value=csrf_token,
         max_age=7 * 24 * 3600,
         httponly=False,  # JS needs to read this
-        secure=True,
+        secure=COOKIE_SECURE,
         samesite="lax",
     )
     return response
@@ -204,37 +180,13 @@ def _validate_battle_id(battle_id: str) -> None:
         raise HTTPException(400, "invalid battle ID format")
 
 
-def _get_client_ip(request: Request) -> str:
-    """Return the client IP to key rate-limits on.
-
-    X-Forwarded-For is only honored when the direct peer is in TRUSTED_PROXIES.
-    Otherwise a client on the open internet could rotate the header to bypass
-    the per-IP battle rate limit — the direct-port deployment shipped with no
-    reverse proxy at all, and the limiter was the only thing between an
-    authenticated caller and unbounded provider spend.
-    """
-    peer_host = request.client.host if request.client else None
-
-    if peer_host and TRUSTED_PROXIES:
-        try:
-            peer_ip = ipaddress.ip_address(peer_host)
-            if any(peer_ip in net for net in TRUSTED_PROXIES):
-                forwarded = request.headers.get("x-forwarded-for")
-                if forwarded:
-                    # The leftmost IP is the original client; everything after
-                    # is the proxy chain we just verified.
-                    return forwarded.split(",")[0].strip()
-        except ValueError:
-            # Peer host wasn't an IP (unix socket etc.); fall through and key
-            # on the raw peer string below.
-            pass
-
-    return peer_host or "unknown"
+# Kept as the historical name; the implementation lives in app/clientip.py.
+_get_client_ip = get_client_ip
 
 
 @app.post("/api/battle")
 async def create_battle(req: BattleRequest, request: Request):
-    client_ip = _get_client_ip(request)
+    client_ip = get_client_ip(request)
     if not battle_limiter.is_allowed(client_ip):
         raise HTTPException(429, "slow down — max 10 battles per minute")
 
@@ -242,6 +194,11 @@ async def create_battle(req: BattleRequest, request: Request):
         raise HTTPException(400, "prompt is required")
     if len(req.prompt) > 10000:
         raise HTTPException(400, "prompt too long (max 10000 chars)")
+
+    try:
+        reasoning_effort = normalize_reasoning_effort(req.reasoning_effort)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
     # Reject caller-controlled categories that no enabled model advertises.
     # The auto-select path already fails on unknown categories via
@@ -255,30 +212,39 @@ async def create_battle(req: BattleRequest, request: Request):
             f"unknown category '{req.category}'; must be one of: {', '.join(sorted(known)) or '(none configured)'}",
         )
 
-    if req.model_a and req.model_b:
-        model_a = config.get_model(req.model_a)
-        model_b = config.get_model(req.model_b)
-        if not model_a:
-            raise HTTPException(400, f"model not found: {req.model_a}")
-        if not model_b:
-            raise HTTPException(400, f"model not found: {req.model_b}")
-        if req.model_a == req.model_b:
-            raise HTTPException(400, "pick two different models")
-        # Both explicit models must actually support the requested category —
+    def _explicit(model_id: str):
+        model = config.get_model(model_id)
+        if not model or not model.enabled:
+            raise HTTPException(400, f"model not found: {model_id}")
+        # An explicit model must actually support the requested category —
         # otherwise Elo ratings for that category get updated for models that
         # never competed in it.
-        for m in (model_a, model_b):
-            if req.category not in m.categories:
-                raise HTTPException(400, f"model '{m.id}' does not support category '{req.category}'")
-    else:
-        try:
-            model_a, model_b = select_models(config, req.category)
-        except ValueError as e:
-            raise HTTPException(400, str(e))
+        if req.category not in model.categories:
+            raise HTTPException(400, f"model '{model.id}' does not support category '{req.category}'")
+        return model
 
-    battle_id = await store.create_battle(req.prompt, req.category, model_a.id, model_b.id)
+    try:
+        if req.model_a and req.model_b:
+            if req.model_a == req.model_b:
+                raise HTTPException(400, "pick two different models")
+            model_a = _explicit(req.model_a)
+            model_b = _explicit(req.model_b)
+        elif req.model_a:
+            # One side chosen, the other drawn at random. The chosen model
+            # keeps the slot the user put it in.
+            model_a = _explicit(req.model_a)
+            model_b = pick_opponent(config, req.category, model_a)
+        elif req.model_b:
+            model_b = _explicit(req.model_b)
+            model_a = pick_opponent(config, req.category, model_b)
+        else:
+            model_a, model_b = select_models(config, req.category)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    battle_id = await store.create_battle(req.prompt, req.category, model_a.id, model_b.id, reasoning_effort)
     record_battle_started(req.category)
-    return {"battle_id": battle_id}
+    return {"battle_id": battle_id, "reasoning_effort": reasoning_effort}
 
 
 @app.get("/api/battle/{battle_id}/stream")
@@ -317,24 +283,7 @@ async def vote(battle_id: str, req: VoteRequest):
     record_vote("human", req.winner)
 
     # Reveal model identities
-    model_a = config.get_model(battle["model_a"])
-    model_b = config.get_model(battle["model_b"])
-
-    return {
-        "model_a_id": battle["model_a"],
-        "model_a_name": model_a.display_name if model_a else battle["model_a"],
-        "model_a_provider": model_a.provider_name if model_a else "unknown",
-        "model_b_id": battle["model_b"],
-        "model_b_name": model_b.display_name if model_b else battle["model_b"],
-        "model_b_provider": model_b.provider_name if model_b else "unknown",
-        "latency_a_ms": battle["latency_a_ms"],
-        "latency_b_ms": battle["latency_b_ms"],
-        "tokens_a": battle["tokens_a"],
-        "tokens_b": battle["tokens_b"],
-        "cost_a": battle["cost_a"],
-        "cost_b": battle["cost_b"],
-        **elo_results,
-    }
+    return reveal_payload(config, battle, **elo_results)
 
 
 @app.get("/api/battle/{battle_id}")
@@ -349,40 +298,29 @@ async def get_battle(battle_id: str):
     if not battle or not battle.get("winner"):
         raise HTTPException(404, "battle not found")
 
-    model_a = config.get_model(battle["model_a"])
-    model_b = config.get_model(battle["model_b"])
     elo = await store.get_vote_log(battle_id)
 
-    return {
-        "id": battle["id"],
-        "prompt": battle["prompt"],
-        "category": battle["category"],
-        "response_a": battle["response_a"],
-        "response_b": battle["response_b"],
-        "winner": battle["winner"],
-        "created_at": battle["created_at"],
-        "voted_at": battle["voted_at"],
-        "model_a_id": battle["model_a"],
-        "model_a_name": model_a.display_name if model_a else battle["model_a"],
-        "model_a_provider": model_a.provider_name if model_a else "unknown",
-        "model_b_id": battle["model_b"],
-        "model_b_name": model_b.display_name if model_b else battle["model_b"],
-        "model_b_provider": model_b.provider_name if model_b else "unknown",
-        "latency_a_ms": battle["latency_a_ms"],
-        "latency_b_ms": battle["latency_b_ms"],
-        "tokens_a": battle["tokens_a"],
-        "tokens_b": battle["tokens_b"],
-        "cost_a": battle["cost_a"],
-        "cost_b": battle["cost_b"],
-        "rating_a_before": elo["rating_a_before"] if elo else None,
-        "rating_b_before": elo["rating_b_before"] if elo else None,
-        "rating_a_after": elo["rating_a_after"] if elo else None,
-        "rating_b_after": elo["rating_b_after"] if elo else None,
-        "vote_method": elo["method"] if elo else None,
-        "judge_reasoning": elo["judge_reasoning"] if elo else None,
-        "judge_model_id": elo["judge_model_id"] if elo else None,
-        "judge_cost": elo["judge_cost"] if elo else None,
-    }
+    return reveal_payload(
+        config,
+        battle,
+        id=battle["id"],
+        prompt=battle["prompt"],
+        category=battle["category"],
+        response_a=battle["response_a"],
+        response_b=battle["response_b"],
+        winner=battle["winner"],
+        created_at=battle["created_at"],
+        voted_at=battle["voted_at"],
+        rating_a_before=elo["rating_a_before"] if elo else None,
+        rating_b_before=elo["rating_b_before"] if elo else None,
+        rating_a_after=elo["rating_a_after"] if elo else None,
+        rating_b_after=elo["rating_b_after"] if elo else None,
+        vote_method=elo["method"] if elo else None,
+        judge_reasoning=elo["judge_reasoning"] if elo else None,
+        judge_model_id=elo["judge_model_id"] if elo else None,
+        judge_cost=elo["judge_cost"] if elo else None,
+        audience_tally=parse_tally(elo["audience_tally"]) if elo else None,
+    )
 
 
 @app.post("/api/battle/{battle_id}/judge")
@@ -435,29 +373,17 @@ async def judge_battle(battle_id: str):
 
     record_vote("judge", verdict["winner"], judge_model_id=verdict["judge_model_id"], judge_cost=verdict["cost"])
 
-    model_a = config.get_model(battle["model_a"])
-    model_b = config.get_model(battle["model_b"])
-    return {
-        "model_a_id": battle["model_a"],
-        "model_a_name": model_a.display_name if model_a else battle["model_a"],
-        "model_a_provider": model_a.provider_name if model_a else "unknown",
-        "model_b_id": battle["model_b"],
-        "model_b_name": model_b.display_name if model_b else battle["model_b"],
-        "model_b_provider": model_b.provider_name if model_b else "unknown",
-        "latency_a_ms": battle["latency_a_ms"],
-        "latency_b_ms": battle["latency_b_ms"],
-        "tokens_a": battle["tokens_a"],
-        "tokens_b": battle["tokens_b"],
-        "cost_a": battle["cost_a"],
-        "cost_b": battle["cost_b"],
-        "vote_method": "judge",
-        "judge_reasoning": verdict["reasoning"],
-        "judge_model_id": verdict["judge_model_id"],
-        "judge_display_name": verdict["judge_display_name"],
-        "judge_cost": verdict["cost"],
-        "judge_latency_ms": verdict["latency_ms"],
+    return reveal_payload(
+        config,
+        battle,
+        vote_method="judge",
+        judge_reasoning=verdict["reasoning"],
+        judge_model_id=verdict["judge_model_id"],
+        judge_display_name=verdict["judge_display_name"],
+        judge_cost=verdict["cost"],
+        judge_latency_ms=verdict["latency_ms"],
         **elo_results,
-    }
+    )
 
 
 MIN_BATTLES_FOR_RANKING = 5
@@ -535,144 +461,16 @@ async def stats():
 
 @app.get("/api/models")
 async def list_models():
-    return [{"id": m.id, "display_name": m.display_name, "categories": m.categories} for m in config.enabled_models()]
-
-
-async def _run_suite(run_id: str, suite_name: str) -> None:
-    """Background task: run every prompt in a suite, judge, tally.
-
-    Sequential (not parallel) so slow providers don't stampede rate limits.
-    Errors on individual prompts are recorded but don't abort the run.
-    """
-    suite = suites.get(suite_name)
-    if not suite:
-        await store.finish_suite_run(run_id, "errored", 0.0)
-        return
-
-    judge_model = config.judge_model()
-    total_cost = 0.0
-    status = "completed"
-
-    for prompt in suite.prompts:
-        try:
-            model_a, model_b = select_models(config, suite.category)
-        except ValueError as e:
-            await store.record_suite_battle(run_id, prompt.id, None, None, str(e))
-            continue
-
-        battle_id = await store.create_battle(prompt.prompt, suite.category, model_a.id, model_b.id)
-        try:
-            results = await run_battle_headless(config, store, battle_id)
-        except Exception as e:
-            log.exception("suite %s prompt %s: battle failed", suite_name, prompt.id)
-            await store.record_suite_battle(run_id, prompt.id, battle_id, None, f"battle: {e}")
-            continue
-
-        err_a = results["a"].get("error")
-        err_b = results["b"].get("error")
-        if err_a or err_b:
-            msg = f"a: {err_a}" if err_a else ""
-            msg += (" | " if err_a and err_b else "") + (f"b: {err_b}" if err_b else "")
-            await store.record_suite_battle(run_id, prompt.id, battle_id, None, msg)
-            continue
-
-        total_cost += results["a"]["cost"] + results["b"]["cost"]
-
-        if not judge_model or not config.judge:
-            # No judge → skip the vote, record the battle unfinished. Operator
-            # can still vote manually later; the suite run just carries no
-            # winner for this prompt.
-            await store.record_suite_battle(run_id, prompt.id, battle_id, None, "no judge configured")
-            continue
-
-        try:
-            verdict = await run_judge(
-                config,
-                config.judge,
-                judge_model,
-                prompt.prompt,
-                results["a"]["response"],
-                results["b"]["response"],
-            )
-            total_cost += verdict["cost"]
-        except JudgeError as e:
-            await store.record_suite_battle(run_id, prompt.id, battle_id, None, f"judge: {e}")
-            continue
-
-        try:
-            await store.record_vote(
-                battle_id,
-                verdict["winner"],
-                method="judge",
-                judge_reasoning=verdict["reasoning"],
-                judge_model_id=verdict["judge_model_id"],
-                judge_cost=verdict["cost"],
-            )
-        except ValueError as e:
-            await store.record_suite_battle(run_id, prompt.id, battle_id, None, f"vote: {e}")
-            continue
-
-        await store.record_suite_battle(run_id, prompt.id, battle_id, verdict["winner"], None)
-
-    await store.finish_suite_run(run_id, status, total_cost)
-    record_suite_run_completed(suite_name)
-    log.info("suite %s run %s done: $%.4f", suite_name, run_id, total_cost)
-
-
-@app.get("/api/suites")
-async def list_suites_route():
-    """List all suites the server picked up at startup."""
     return [
         {
-            "name": s.name,
-            "description": s.description,
-            "category": s.category,
-            "prompt_count": len(s.prompts),
+            "id": m.id,
+            "display_name": m.display_name,
+            "categories": m.categories,
+            "provider": m.provider_name,
+            "reasoning": "off" if m.reasoning is False else ("yes" if m.reasoning else "auto"),
         }
-        for s in suites.values()
+        for m in config.enabled_models()
     ]
-
-
-@app.get("/api/suites/{name}")
-async def get_suite_route(name: str):
-    suite = suites.get(name)
-    if not suite:
-        raise HTTPException(404, f"suite not found: {name}")
-    return {
-        "name": suite.name,
-        "description": suite.description,
-        "category": suite.category,
-        "prompts": [{"id": p.id, "prompt": p.prompt} for p in suite.prompts],
-    }
-
-
-@app.post("/api/suites/{name}/run")
-async def run_suite_route(name: str):
-    """Kick off a background run of the named suite; returns a run_id to poll."""
-    suite = suites.get(name)
-    if not suite:
-        raise HTTPException(404, f"suite not found: {name}")
-    if not config.judge_model():
-        raise HTTPException(400, "suite runs require a configured judge (see models.yaml)")
-    run_id = await store.create_suite_run(name, len(suite.prompts))
-    record_suite_run_started(name)
-    asyncio.create_task(_run_suite(run_id, name))
-    return {"run_id": run_id, "battles_total": len(suite.prompts), "status": "running"}
-
-
-@app.get("/api/suites/{name}/runs")
-async def list_suite_runs_route(name: str):
-    if name not in suites:
-        raise HTTPException(404, f"suite not found: {name}")
-    return await store.list_suite_runs(name)
-
-
-@app.get("/api/suites/runs/{run_id}")
-async def get_suite_run_route(run_id: str):
-    run = await store.get_suite_run(run_id)
-    if not run:
-        raise HTTPException(404, "run not found")
-    return run
 
 
 @app.get("/api/metrics")
@@ -738,6 +536,12 @@ async def features():
             "enabled": len(suites) > 0,
             "count": len(suites),
         },
+        "reasoning": {
+            "efforts": list(REASONING_EFFORTS),
+        },
+        "audience": {
+            "enabled": True,
+        },
     }
 
 
@@ -773,6 +577,7 @@ async def export_battles(format: str = "csv"):
             "model_b",
             "model_b_name",
             "winner",
+            "reasoning_effort",
             "latency_a_ms",
             "latency_b_ms",
             "tokens_a",
@@ -791,6 +596,12 @@ async def export_battles(format: str = "csv"):
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=open-model-arena-export.csv"},
     )
+
+
+# --- Routers ---
+
+app.include_router(routes_suites.router)
+app.include_router(routes_polls.router)
 
 
 # --- Static Files + SPA Routing ---

@@ -89,3 +89,48 @@ models:
     config = load_config(str(cfg))
     assert len(config.models) == 1
     assert config.get_model("m1").display_name == "Model One"
+
+
+# --- reasoning flag ---
+
+
+def _write_models(tmp_path, reasoning_line: str) -> str:
+    path = tmp_path / "models.yaml"
+    path.write_text(
+        "providers:\n"
+        "  p:\n"
+        "    base_url: http://x/v1\n"
+        "    api_key: k\n"
+        "models:\n"
+        "  - id: m\n"
+        "    provider: p\n"
+        "    display_name: M\n"
+        "    model_id: m\n"
+        "    categories: [general]\n"
+        f"{reasoning_line}"
+        "  - id: n\n"
+        "    provider: p\n"
+        "    display_name: N\n"
+        "    model_id: n\n"
+        "    categories: [general]\n"
+    )
+    return str(path)
+
+
+def test_reasoning_defaults_to_auto(tmp_path):
+    cfg = load_config(_write_models(tmp_path, ""))
+    assert cfg.get_model("m").reasoning is None
+
+
+def test_reasoning_true_and_false(tmp_path):
+    cfg = load_config(_write_models(tmp_path, "    reasoning: true\n"))
+    assert cfg.get_model("m").reasoning is True
+    cfg = load_config(_write_models(tmp_path, "    reasoning: false\n"))
+    assert cfg.get_model("m").reasoning is False
+    cfg = load_config(_write_models(tmp_path, "    reasoning: auto\n"))
+    assert cfg.get_model("m").reasoning is None
+
+
+def test_reasoning_rejects_garbage(tmp_path):
+    with pytest.raises(ConfigError, match="reasoning"):
+        load_config(_write_models(tmp_path, "    reasoning: sometimes\n"))

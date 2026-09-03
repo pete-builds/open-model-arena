@@ -285,3 +285,94 @@ async def test_concurrent_update_and_vote_are_isolated(test_store):
     # Elo delta is consistent with a single "a" win at 1500 vs 1500.
     log = await test_store.get_vote_log(bid)
     assert abs((log["rating_a_after"] - 1500.0) - 16.0) < 1e-6
+
+
+# --- audience polls ---
+
+
+@pytest.mark.asyncio
+async def test_create_poll_is_idempotent_per_battle(test_store):
+    battle_id = await test_store.create_battle("q", "general", "model-alpha", "model-beta")
+    first = await test_store.create_poll(battle_id)
+    second = await test_store.create_poll(battle_id)
+    assert first["code"] == second["code"]
+    assert len(first["code"]) == 6
+    assert first["status"] == "open"
+    assert await test_store.get_poll(first["code"]) is not None
+    assert await test_store.get_poll("NOPE00") is None
+
+
+@pytest.mark.asyncio
+async def test_poll_votes_upsert_per_voter(test_store):
+    battle_id = await test_store.create_battle("q", "general", "model-alpha", "model-beta")
+    poll = await test_store.create_poll(battle_id)
+    code = poll["code"]
+
+    await test_store.cast_poll_vote(code, "voter-one-1234", "a")
+    await test_store.cast_poll_vote(code, "voter-one-1234", "b")  # changed mind
+    await test_store.cast_poll_vote(code, "voter-two-1234", "b")
+    await test_store.cast_poll_vote(code, "voter-three-12", "tie")
+
+    tally = await test_store.get_poll_tally(code)
+    assert tally == {"a": 0, "b": 2, "tie": 1, "total": 3}
+    assert await test_store.get_poll_voter_choice(code, "voter-one-1234") == "b"
+    assert await test_store.get_poll_voter_choice(code, "nobody-000000") is None
+
+    with pytest.raises(ValueError, match="choice"):
+        await test_store.cast_poll_vote(code, "voter-one-1234", "c")
+    with pytest.raises(ValueError, match="not found"):
+        await test_store.cast_poll_vote("ZZZZZZ", "voter-one-1234", "a")
+
+
+@pytest.mark.asyncio
+async def test_close_poll_rejects_further_votes(test_store):
+    battle_id = await test_store.create_battle("q", "general", "model-alpha", "model-beta")
+    poll = await test_store.create_poll(battle_id)
+    await test_store.cast_poll_vote(poll["code"], "voter-one-1234", "a")
+
+    assert await test_store.close_poll(poll["code"]) is True
+    assert await test_store.close_poll(poll["code"]) is False
+    assert (await test_store.get_poll(poll["code"]))["status"] == "closed"
+    with pytest.raises(ValueError, match="closed"):
+        await test_store.cast_poll_vote(poll["code"], "voter-two-1234", "b")
+
+
+@pytest.mark.asyncio
+async def test_poll_expires_after_ttl(test_store):
+    battle_id = await test_store.create_battle("q", "general", "model-alpha", "model-beta")
+    poll = await test_store.create_poll(battle_id)
+    await test_store.db.execute(
+        "UPDATE polls SET created_at = datetime('now', '-7 hours') WHERE code = ?", (poll["code"],)
+    )
+    await test_store.db.commit()
+    assert (await test_store.get_poll(poll["code"]))["status"] == "expired"
+    with pytest.raises(ValueError, match="expired"):
+        await test_store.cast_poll_vote(poll["code"], "voter-one-1234", "a")
+
+
+@pytest.mark.asyncio
+async def test_poll_voter_cap(test_store, monkeypatch):
+    from app import store as store_mod
+
+    monkeypatch.setattr(store_mod, "POLL_MAX_VOTERS", 2)
+    battle_id = await test_store.create_battle("q", "general", "model-alpha", "model-beta")
+    poll = await test_store.create_poll(battle_id)
+    await test_store.cast_poll_vote(poll["code"], "voter-one-1234", "a")
+    await test_store.cast_poll_vote(poll["code"], "voter-two-1234", "a")
+    # existing voters may still change their vote
+    await test_store.cast_poll_vote(poll["code"], "voter-two-1234", "b")
+    with pytest.raises(ValueError, match="full"):
+        await test_store.cast_poll_vote(poll["code"], "voter-three-12", "a")
+
+
+@pytest.mark.asyncio
+async def test_record_vote_stores_audience_tally(test_store):
+    battle_id = await test_store.create_battle("q", "general", "model-alpha", "model-beta", reasoning_effort="low")
+    await test_store.record_vote(battle_id, "a", method="audience", audience_tally='{"a": 3, "b": 1}')
+    log = await test_store.get_vote_log(battle_id)
+    assert log["method"] == "audience"
+    assert log["audience_tally"] == '{"a": 3, "b": 1}'
+    battle = await test_store.get_battle(battle_id)
+    assert battle["reasoning_effort"] == "low"
+    exported = await test_store.get_all_voted_battles()
+    assert exported[0]["reasoning_effort"] == "low"

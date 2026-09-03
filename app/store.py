@@ -80,6 +80,25 @@ CREATE TABLE IF NOT EXISTS vote_log (
     rating_b_after REAL,
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS polls (
+    code TEXT PRIMARY KEY,
+    battle_id TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    closed_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS poll_votes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    poll_code TEXT NOT NULL,
+    voter_id TEXT NOT NULL,
+    choice TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (poll_code, voter_id),
+    FOREIGN KEY (poll_code) REFERENCES polls(code)
+);
 """
 
 # Column-level additions applied idempotently after schema creation. SQLite
@@ -91,7 +110,20 @@ _ADDITIVE_COLUMNS = [
     ("vote_log", "judge_model_id", "TEXT"),
     ("vote_log", "judge_cost", "REAL"),
     ("battles", "execution_state", "TEXT"),
+    ("battles", "reasoning_effort", "TEXT"),
+    ("vote_log", "audience_tally", "TEXT"),
 ]
+
+# Poll lifecycle. A poll is open for at most POLL_TTL_SECONDS after creation;
+# past that it reads as 'expired' and refuses votes, so a leaked join code
+# from last week's class cannot be replayed into this week's leaderboard.
+POLL_STATUS_OPEN = "open"
+POLL_STATUS_CLOSED = "closed"
+POLL_STATUS_EXPIRED = "expired"
+POLL_TTL_SECONDS = 6 * 3600
+POLL_MAX_VOTERS = 1000
+# Unambiguous alphabet for join codes typed from a projector: no 0/O, 1/I/L.
+_POLL_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 # execution_state values on the battles row:
 #   NULL / 'pending' → never streamed, safe to claim
@@ -106,6 +138,10 @@ EXEC_STATE_ERROR = "error"
 def _gen_id(length: int = 16) -> str:
     alphabet = string.ascii_letters + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _gen_poll_code(length: int = 6) -> str:
+    return "".join(secrets.choice(_POLL_CODE_ALPHABET) for _ in range(length))
 
 
 class Store:
@@ -152,12 +188,20 @@ class Store:
         if self.db:
             await self.db.close()
 
-    async def create_battle(self, prompt: str, category: str, model_a: str, model_b: str) -> str:
+    async def create_battle(
+        self,
+        prompt: str,
+        category: str,
+        model_a: str,
+        model_b: str,
+        reasoning_effort: str | None = None,
+    ) -> str:
         battle_id = _gen_id()
         async with self._write_lock:
             await self.db.execute(
-                "INSERT INTO battles (id, prompt, category, model_a, model_b) VALUES (?, ?, ?, ?, ?)",
-                (battle_id, prompt, category, model_a, model_b),
+                "INSERT INTO battles (id, prompt, category, model_a, model_b, reasoning_effort)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (battle_id, prompt, category, model_a, model_b, reasoning_effort),
             )
             await self.db.commit()
         return battle_id
@@ -236,6 +280,7 @@ class Store:
         judge_reasoning: str | None = None,
         judge_model_id: str | None = None,
         judge_cost: float | None = None,
+        audience_tally: str | None = None,
     ) -> dict:
         # Existence check outside the lock is a fast-path; the real check
         # happens inside the transaction below via the conditional UPDATE.
@@ -299,8 +344,8 @@ class Store:
                 await self.db.execute(
                     "INSERT INTO vote_log (battle_id, model_a, model_b, winner,"
                     " rating_a_before, rating_b_before, rating_a_after, rating_b_after,"
-                    " method, judge_reasoning, judge_model_id, judge_cost)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " method, judge_reasoning, judge_model_id, judge_cost, audience_tally)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         battle_id,
                         model_a,
@@ -314,6 +359,7 @@ class Store:
                         judge_reasoning,
                         judge_model_id,
                         judge_cost,
+                        audience_tally,
                     ),
                 )
                 await self.db.commit()
@@ -370,7 +416,7 @@ class Store:
         """Return the ELO delta + method row for a battle's vote, or None if unvoted."""
         cursor = await self.db.execute(
             "SELECT rating_a_before, rating_b_before, rating_a_after, rating_b_after, "
-            "method, judge_reasoning, judge_model_id, judge_cost "
+            "method, judge_reasoning, judge_model_id, judge_cost, audience_tally "
             "FROM vote_log WHERE battle_id = ? ORDER BY id DESC LIMIT 1",
             (battle_id,),
         )
@@ -379,12 +425,130 @@ class Store:
 
     async def get_all_voted_battles(self) -> list[dict]:
         cursor = await self.db.execute(
-            "SELECT id, prompt, category, model_a, model_b, winner, "
+            "SELECT id, prompt, category, model_a, model_b, winner, reasoning_effort, "
             "latency_a_ms, latency_b_ms, tokens_a, tokens_b, cost_a, cost_b, "
             "created_at, voted_at FROM battles WHERE winner IS NOT NULL ORDER BY created_at DESC"
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    # --- Audience polls ---
+
+    async def create_poll(self, battle_id: str) -> dict:
+        """Open an audience poll for a battle, or return the existing one.
+
+        One poll per battle. Codes are retried on the (rare) collision.
+        """
+        existing = await self.get_poll_for_battle(battle_id)
+        if existing:
+            return existing
+        async with self._write_lock:
+            for _ in range(10):
+                code = _gen_poll_code()
+                try:
+                    await self.db.execute(
+                        "INSERT INTO polls (code, battle_id) VALUES (?, ?)",
+                        (code, battle_id),
+                    )
+                except aiosqlite.IntegrityError as e:
+                    msg = str(e).lower()
+                    if "polls.battle_id" in msg:
+                        # Lost a race with another opener; return theirs.
+                        await self.db.rollback()
+                        break
+                    continue  # code collision, draw again
+                await self.db.commit()
+                break
+            else:
+                raise StoreError("could not allocate a poll code")
+        poll = await self.get_poll_for_battle(battle_id)
+        if not poll:
+            raise StoreError("poll vanished after creation")
+        return poll
+
+    def _poll_row(self, row) -> dict:
+        poll = dict(row)
+        if poll["status"] == POLL_STATUS_OPEN and (poll.get("age_s") or 0) > POLL_TTL_SECONDS:
+            poll["status"] = POLL_STATUS_EXPIRED
+        poll.pop("age_s", None)
+        return poll
+
+    async def get_poll(self, code: str) -> dict | None:
+        cursor = await self.db.execute(
+            "SELECT code, battle_id, status, created_at, closed_at,"
+            " (strftime('%s','now') - strftime('%s', created_at)) AS age_s FROM polls WHERE code = ?",
+            (code,),
+        )
+        row = await cursor.fetchone()
+        return self._poll_row(row) if row else None
+
+    async def get_poll_for_battle(self, battle_id: str) -> dict | None:
+        cursor = await self.db.execute(
+            "SELECT code, battle_id, status, created_at, closed_at,"
+            " (strftime('%s','now') - strftime('%s', created_at)) AS age_s FROM polls WHERE battle_id = ?",
+            (battle_id,),
+        )
+        row = await cursor.fetchone()
+        return self._poll_row(row) if row else None
+
+    async def cast_poll_vote(self, code: str, voter_id: str, choice: str) -> None:
+        """Record or change one voter's choice on an open poll.
+
+        Raises ValueError when the poll is missing, not open, or full.
+        """
+        if choice not in ("a", "b", "tie"):
+            raise ValueError("choice must be 'a', 'b', or 'tie'")
+        async with self._write_lock:
+            poll = await self.get_poll(code)
+            if not poll:
+                raise ValueError("poll not found")
+            if poll["status"] != POLL_STATUS_OPEN:
+                raise ValueError(f"poll is {poll['status']}")
+            cursor = await self.db.execute(
+                "SELECT COUNT(*) AS c FROM poll_votes WHERE poll_code = ? AND voter_id != ?",
+                (code, voter_id),
+            )
+            row = await cursor.fetchone()
+            if row["c"] >= POLL_MAX_VOTERS:
+                raise ValueError("poll is full")
+            await self.db.execute(
+                "INSERT INTO poll_votes (poll_code, voter_id, choice) VALUES (?, ?, ?)"
+                " ON CONFLICT(poll_code, voter_id) DO UPDATE SET choice = excluded.choice,"
+                " updated_at = datetime('now')",
+                (code, voter_id, choice),
+            )
+            await self.db.commit()
+
+    async def get_poll_tally(self, code: str) -> dict:
+        cursor = await self.db.execute(
+            "SELECT choice, COUNT(*) AS c FROM poll_votes WHERE poll_code = ? GROUP BY choice",
+            (code,),
+        )
+        rows = await cursor.fetchall()
+        tally = {"a": 0, "b": 0, "tie": 0}
+        for r in rows:
+            if r["choice"] in tally:
+                tally[r["choice"]] = r["c"]
+        tally["total"] = tally["a"] + tally["b"] + tally["tie"]
+        return tally
+
+    async def get_poll_voter_choice(self, code: str, voter_id: str) -> str | None:
+        cursor = await self.db.execute(
+            "SELECT choice FROM poll_votes WHERE poll_code = ? AND voter_id = ?",
+            (code, voter_id),
+        )
+        row = await cursor.fetchone()
+        return row["choice"] if row else None
+
+    async def close_poll(self, code: str) -> bool:
+        """Flip an open poll to closed. Returns False if it was not open."""
+        async with self._write_lock:
+            cursor = await self.db.execute(
+                "UPDATE polls SET status = ?, closed_at = datetime('now') WHERE code = ? AND status = ?",
+                (POLL_STATUS_CLOSED, code, POLL_STATUS_OPEN),
+            )
+            await self.db.commit()
+            return cursor.rowcount == 1
 
     # --- Cost breakdown ---
 

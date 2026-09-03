@@ -5,6 +5,7 @@ import { initTheme, toggleTheme } from './theme.js';
 import { setupTemplates } from './templates.js';
 import { loadLeaderboard, exportData } from './leaderboard.js';
 import { startBattle, submitVote, loadPermalink, requestJudgeVote } from './battle.js';
+import { openAudiencePoll, closeAudiencePoll } from './audience.js';
 
 // --- Stats ---
 
@@ -41,7 +42,24 @@ async function loadFeatures() {
             const nameEl = $('#judge-model-name');
             if (nameEl) nameEl.textContent = state.judgeName;
         }
+        if (data.reasoning && Array.isArray(data.reasoning.efforts)) {
+            state.reasoningEfforts = data.reasoning.efforts;
+            populateReasoningSelect();
+        }
     } catch (e) { /* silent */ }
+}
+
+function populateReasoningSelect() {
+    const select = $('#reasoning-select');
+    const current = select.value;
+    select.innerHTML = '<option value="">thinking: off</option>';
+    state.reasoningEfforts.forEach(effort => {
+        const opt = document.createElement('option');
+        opt.value = effort;
+        opt.textContent = `thinking: ${effort}`;
+        select.appendChild(opt);
+    });
+    if ([...select.options].some(o => o.value === current)) select.value = current;
 }
 
 function populateModelSelects() {
@@ -177,8 +195,8 @@ document.addEventListener('DOMContentLoaded', () => {
         showView('arena');
     });
 
-    // Vote buttons
-    $$('.vote-btn').forEach(btn => {
+    // Vote buttons (scoped: the audience panel has its own buttons)
+    $$('#vote-section .vote-btn').forEach(btn => {
         btn.addEventListener('click', () => submitVote(btn.dataset.vote));
     });
 
@@ -187,6 +205,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (judgeBtn) {
         judgeBtn.addEventListener('click', requestJudgeVote);
     }
+
+    // Audience poll — phones vote, presenter closes
+    $('#audience-open-btn').addEventListener('click', openAudiencePoll);
+    $('#audience-close-btn').addEventListener('click', closeAudiencePoll);
 
     // Share button — copies the current battle permalink
     const shareBtn = $('#share-btn');

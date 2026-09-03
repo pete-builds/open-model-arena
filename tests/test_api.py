@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 os.environ.setdefault("ARENA_PASSPHRASE", "test-passphrase")
 os.environ.setdefault("AUTH_TOKEN_SECRET", "test-secret-key")
 
+from app import clientip, runtime
 from app.main import ARENA_PASSPHRASE, _make_token, app, battle_limiter, store
 
 
@@ -292,7 +293,7 @@ def test_get_client_ip_ignores_xff_from_untrusted_peer(monkeypatch):
     """Default (no TRUSTED_PROXIES): XFF is ignored, socket peer wins."""
     from app import main
 
-    monkeypatch.setattr(main, "TRUSTED_PROXIES", [])
+    monkeypatch.setattr(clientip, "TRUSTED_PROXIES", [])
     req = _mock_request(peer="203.0.113.99", xff="1.2.3.4, 5.6.7.8")
     assert main._get_client_ip(req) == "203.0.113.99"
 
@@ -303,7 +304,7 @@ def test_get_client_ip_honors_xff_from_trusted_peer(monkeypatch):
 
     from app import main
 
-    monkeypatch.setattr(main, "TRUSTED_PROXIES", [ipaddress.ip_network("10.0.0.0/8")])
+    monkeypatch.setattr(clientip, "TRUSTED_PROXIES", [ipaddress.ip_network("10.0.0.0/8")])
     req = _mock_request(peer="10.0.0.5", xff="1.2.3.4, 5.6.7.8")
     assert main._get_client_ip(req) == "1.2.3.4"
 
@@ -314,7 +315,7 @@ def test_get_client_ip_falls_back_when_no_xff_from_trusted_peer(monkeypatch):
 
     from app import main
 
-    monkeypatch.setattr(main, "TRUSTED_PROXIES", [ipaddress.ip_network("10.0.0.0/8")])
+    monkeypatch.setattr(clientip, "TRUSTED_PROXIES", [ipaddress.ip_network("10.0.0.0/8")])
     req = _mock_request(peer="10.0.0.5", xff=None)
     assert main._get_client_ip(req) == "10.0.0.5"
 
@@ -323,7 +324,7 @@ def test_xff_rate_limit_bypass_defense(monkeypatch):
     """A client rotating XFF from an untrusted peer must not shake off the limiter."""
     from app import main
 
-    monkeypatch.setattr(main, "TRUSTED_PROXIES", [])
+    monkeypatch.setattr(clientip, "TRUSTED_PROXIES", [])
     main.battle_limiter.requests.clear()
 
     for i in range(15):
@@ -814,21 +815,19 @@ async def test_judge_endpoint_409_when_already_voted(client, auth_headers, monke
 
 @pytest.mark.asyncio
 async def test_list_suites_empty_by_default(client, auth_headers_get):
-    from app import main
 
     # example config doesn't ship a suites dir loaded in tests
     resp = await client.get("/api/suites", headers=auth_headers_get)
     assert resp.status_code == 200
     # Loaded once at import time — assertion is about API shape, not contents.
     assert isinstance(resp.json(), list)
-    assert isinstance(main.suites, dict)
+    assert isinstance(runtime.suites, dict)
 
 
 @pytest.mark.asyncio
 async def test_get_suite_404_for_unknown(client, auth_headers_get, monkeypatch):
-    from app import main
 
-    monkeypatch.setattr(main, "suites", {})
+    monkeypatch.setattr(runtime, "suites", {})
     resp = await client.get("/api/suites/nope", headers=auth_headers_get)
     assert resp.status_code == 404
 
@@ -839,7 +838,7 @@ async def test_run_suite_400_without_judge(client, auth_headers, monkeypatch):
     from app.suites import Suite, SuitePrompt
 
     monkeypatch.setattr(
-        main,
+        runtime,
         "suites",
         {"tiny": Suite(name="tiny", description="", category="general", prompts=[SuitePrompt(id="p", prompt="q")])},
     )
@@ -863,7 +862,7 @@ async def test_suite_end_to_end(client, auth_headers, auth_headers_get, monkeypa
         category="general",
         prompts=[SuitePrompt(id="p1", prompt="Q1?"), SuitePrompt(id="p2", prompt="Q2?")],
     )
-    monkeypatch.setattr(main, "suites", {"mini": suite})
+    monkeypatch.setattr(runtime, "suites", {"mini": suite})
 
     # Configure a fake judge
     judge_model = Model(
@@ -896,8 +895,10 @@ async def test_suite_end_to_end(client, auth_headers, auth_headers_get, monkeypa
             "judge_display_name": "Suite Judge",
         }
 
-    monkeypatch.setattr(main, "run_battle_headless", fake_run_battle_headless)
-    monkeypatch.setattr(main, "run_judge", fake_run_judge)
+    from app import routes_suites
+
+    monkeypatch.setattr(routes_suites, "run_battle_headless", fake_run_battle_headless)
+    monkeypatch.setattr(routes_suites, "run_judge", fake_run_judge)
 
     # Kick off the run
     resp = await client.post("/api/suites/mini/run", headers=auth_headers)
@@ -928,11 +929,10 @@ async def test_suite_end_to_end(client, auth_headers, auth_headers_get, monkeypa
 
 @pytest.mark.asyncio
 async def test_list_suite_runs(client, auth_headers_get, monkeypatch):
-    from app import main
     from app.suites import Suite, SuitePrompt
 
     monkeypatch.setattr(
-        main,
+        runtime,
         "suites",
         {"foo": Suite(name="foo", description="", category="general", prompts=[SuitePrompt(id="p", prompt="q")])},
     )
@@ -1067,3 +1067,254 @@ async def test_metrics_records_battle_created(client, auth_headers, auth_headers
 
     label = 'arena_battles_started_total{category="general"}'
     assert _counter_val(after, label) > _counter_val(before, label)
+
+
+# --- Thinking / reasoning effort ---
+
+
+@pytest.mark.asyncio
+async def test_create_battle_stores_reasoning_effort(client, auth_headers):
+    resp = await client.post(
+        "/api/battle",
+        json={"prompt": "think hard", "category": "general", "reasoning_effort": "high"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reasoning_effort"] == "high"
+    battle = await store.get_battle(resp.json()["battle_id"])
+    assert battle["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_create_battle_reasoning_off_is_null(client, auth_headers):
+    resp = await client.post(
+        "/api/battle",
+        json={"prompt": "hi", "category": "general", "reasoning_effort": "off"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reasoning_effort"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_battle_rejects_bad_reasoning_effort(client, auth_headers):
+    resp = await client.post(
+        "/api/battle",
+        json={"prompt": "hi", "category": "general", "reasoning_effort": "ultra"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert "reasoning_effort" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_models_and_features_advertise_reasoning(client, auth_headers_get):
+    resp = await client.get("/api/models", headers=auth_headers_get)
+    assert resp.status_code == 200
+    assert all(m["reasoning"] in ("auto", "yes", "off") for m in resp.json())
+    resp = await client.get("/api/features", headers=auth_headers_get)
+    assert resp.json()["reasoning"]["efforts"] == ["low", "medium", "high"]
+    assert resp.json()["audience"]["enabled"] is True
+
+
+# --- Single explicit model, random opponent ---
+
+
+@pytest.mark.asyncio
+async def test_create_battle_one_model_picks_random_opponent(client, auth_headers):
+    from app import main
+
+    ids = {m.id for m in main.config.enabled_models("general")}
+    chosen = sorted(ids)[0]
+    resp = await client.post(
+        "/api/battle",
+        json={"prompt": "hi", "category": "general", "model_a": chosen},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    battle = await store.get_battle(resp.json()["battle_id"])
+    assert battle["model_a"] == chosen
+    assert battle["model_b"] != chosen
+    assert battle["model_b"] in ids
+
+    resp = await client.post(
+        "/api/battle",
+        json={"prompt": "hi", "category": "general", "model_b": chosen},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    battle = await store.get_battle(resp.json()["battle_id"])
+    assert battle["model_b"] == chosen
+    assert battle["model_a"] != chosen
+
+
+@pytest.mark.asyncio
+async def test_create_battle_one_model_unknown(client, auth_headers):
+    resp = await client.post(
+        "/api/battle",
+        json={"prompt": "hi", "category": "general", "model_b": "ghost"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+
+
+# --- Audience polls ---
+
+
+async def _finished_battle(client, auth_headers) -> str:
+    resp = await client.post("/api/battle", json={"prompt": "pick one", "category": "general"}, headers=auth_headers)
+    battle_id = resp.json()["battle_id"]
+    await store.update_response_a(battle_id, "Answer from A", 100, 10, 0.001)
+    await store.update_response_b(battle_id, "Answer from B", 120, 12, 0.002)
+    return battle_id
+
+
+def test_majority_rules():
+    from app.routes_polls import majority
+
+    assert majority({"a": 3, "b": 1, "tie": 0}) == "a"
+    assert majority({"a": 1, "b": 4, "tie": 2}) == "b"
+    assert majority({"a": 2, "b": 2, "tie": 0}) == "tie"
+    assert majority({"a": 1, "b": 1, "tie": 5}) == "tie"
+    assert majority({"a": 0, "b": 0, "tie": 0}) == "tie"
+
+
+@pytest.mark.asyncio
+async def test_poll_end_to_end(client, auth_headers, auth_headers_get):
+    battle_id = await _finished_battle(client, auth_headers)
+
+    # Presenter opens the poll (auth required)
+    resp = await client.post(f"/api/battle/{battle_id}/poll")
+    assert resp.status_code == 401
+    resp = await client.post(f"/api/battle/{battle_id}/poll", headers=auth_headers)
+    assert resp.status_code == 200
+    poll = resp.json()
+    code = poll["code"]
+    assert poll["status"] == "open"
+    assert poll["join_path"] == f"/vote/{code}"
+    assert poll["tally"]["total"] == 0
+
+    # Opening again returns the same code
+    resp = await client.post(f"/api/battle/{battle_id}/poll", headers=auth_headers)
+    assert resp.json()["code"] == code
+
+    # Phones: no auth, no CSRF. Page and poll state are public.
+    resp = await client.get(f"/vote/{code}")
+    assert resp.status_code == 200
+    assert b"audience" in resp.content.lower()
+    resp = await client.get(f"/api/audience/{code.lower()}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "open"
+    assert body["response_a"] == "Answer from A"
+    assert "tally" not in body  # hidden while open
+    assert "model_a_name" not in body
+
+    # Three phones vote; one changes its mind
+    for voter, choice in (("phone-aaaa-0001", "a"), ("phone-bbbb-0002", "b"), ("phone-cccc-0003", "b")):
+        resp = await client.post(f"/api/audience/{code}/vote", json={"voter_id": voter, "choice": choice})
+        assert resp.status_code == 200, resp.text
+    resp = await client.post(f"/api/audience/{code}/vote", json={"voter_id": "phone-aaaa-0001", "choice": "b"})
+    assert resp.json()["vote_count"] == 3
+    resp = await client.get(f"/api/audience/{code}?voter_id=phone-aaaa-0001")
+    assert resp.json()["your_choice"] == "b"
+    assert resp.json()["vote_count"] == 3
+
+    # Bad input on the public side
+    resp = await client.post(f"/api/audience/{code}/vote", json={"voter_id": "x", "choice": "a"})
+    assert resp.status_code == 400
+    resp = await client.post(f"/api/audience/{code}/vote", json={"voter_id": "phone-dddd-0004", "choice": "z"})
+    assert resp.status_code == 400
+    resp = await client.post("/api/audience/ZZZZZZ/vote", json={"voter_id": "phone-dddd-0004", "choice": "a"})
+    assert resp.status_code == 404
+    resp = await client.get("/api/audience/not-a-code")
+    assert resp.status_code == 400
+
+    # Presenter sees the live tally
+    resp = await client.get(f"/api/battle/{battle_id}/poll", headers=auth_headers_get)
+    assert resp.json()["tally"] == {"a": 0, "b": 3, "tie": 0, "total": 3}
+
+    # Close: plurality becomes the recorded vote
+    resp = await client.post(f"/api/battle/{battle_id}/poll/close", headers=auth_headers)
+    assert resp.status_code == 200, resp.text
+    reveal = resp.json()
+    assert reveal["winner"] == "b"
+    assert reveal["vote_method"] == "audience"
+    assert reveal["audience_tally"]["total"] == 3
+    assert reveal["rating_b_after"] > reveal["rating_b_before"]
+    assert "model_a_name" in reveal
+
+    # After close: phones see the reveal, further votes are refused
+    resp = await client.get(f"/api/audience/{code}")
+    body = resp.json()
+    assert body["status"] == "closed"
+    assert body["winner"] == "b"
+    assert body["tally"]["b"] == 3
+    assert body["model_a_name"] and body["model_b_name"]
+    resp = await client.post(f"/api/audience/{code}/vote", json={"voter_id": "phone-eeee-0005", "choice": "a"})
+    assert resp.status_code == 409
+    resp = await client.post(f"/api/battle/{battle_id}/poll/close", headers=auth_headers)
+    assert resp.status_code == 409
+
+    # Permalink carries the tally
+    resp = await client.get(f"/api/battle/{battle_id}", headers=auth_headers_get)
+    assert resp.json()["vote_method"] == "audience"
+    assert resp.json()["audience_tally"] == {"a": 0, "b": 3, "tie": 0, "total": 3}
+
+
+@pytest.mark.asyncio
+async def test_poll_open_requires_finished_unvoted_battle(client, auth_headers, auth_headers_get):
+    resp = await client.post("/api/battle", json={"prompt": "x", "category": "general"}, headers=auth_headers)
+    battle_id = resp.json()["battle_id"]
+    resp = await client.post(f"/api/battle/{battle_id}/poll", headers=auth_headers)
+    assert resp.status_code == 400  # responses not in yet
+
+    battle_id = await _finished_battle(client, auth_headers)
+    await client.post(f"/api/battle/{battle_id}/vote", json={"winner": "a"}, headers=auth_headers)
+    resp = await client.post(f"/api/battle/{battle_id}/poll", headers=auth_headers)
+    assert resp.status_code == 409
+
+    resp = await client.get("/api/battle/abcdefghij123456/poll", headers=auth_headers_get)
+    assert resp.status_code == 404
+    resp = await client.post("/api/battle/abcdefghij123456/poll", headers=auth_headers)
+    assert resp.status_code == 404
+    resp = await client.post("/api/battle/bad!/poll", headers=auth_headers)
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_poll_close_needs_votes_and_loses_to_manual_vote(client, auth_headers):
+    battle_id = await _finished_battle(client, auth_headers)
+    await client.post(f"/api/battle/{battle_id}/poll", headers=auth_headers)
+    resp = await client.post(f"/api/battle/{battle_id}/poll/close", headers=auth_headers)
+    assert resp.status_code == 400  # nothing to count
+
+    code = (await client.get(f"/api/battle/{battle_id}/poll", headers=auth_headers)).json()["code"]
+    await client.post(f"/api/audience/{code}/vote", json={"voter_id": "phone-aaaa-0001", "choice": "a"})
+    # Presenter votes by hand first; closing the poll must not double-vote
+    await client.post(f"/api/battle/{battle_id}/vote", json={"winner": "tie"}, headers=auth_headers)
+    resp = await client.post(f"/api/battle/{battle_id}/poll/close", headers=auth_headers)
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_audience_vote_rate_limited(client, auth_headers):
+    battle_id = await _finished_battle(client, auth_headers)
+    code = (await client.post(f"/api/battle/{battle_id}/poll", headers=auth_headers)).json()["code"]
+    runtime.audience_limiter.requests.clear()
+    limit = runtime.audience_limiter.max_requests
+    for i in range(limit):
+        resp = await client.post(f"/api/audience/{code}/vote", json={"voter_id": f"phone-{i:010d}", "choice": "a"})
+        assert resp.status_code == 200
+    resp = await client.post(f"/api/audience/{code}/vote", json={"voter_id": "phone-overflow-1", "choice": "a"})
+    assert resp.status_code == 429
+    runtime.audience_limiter.requests.clear()
+
+
+@pytest.mark.asyncio
+async def test_audience_prefix_never_reaches_battle_creation(client):
+    """The public prefix must not open a path to anything that spends money."""
+    resp = await client.post("/api/audience/ABCDEF/vote/../../battle", json={"prompt": "x"})
+    assert resp.status_code in (400, 401, 404, 405, 422)
+    resp = await client.post("/api/battle", json={"prompt": "x", "category": "general"})
+    assert resp.status_code == 401

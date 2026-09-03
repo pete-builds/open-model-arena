@@ -1,4 +1,5 @@
-import { $, $$, safeMarkdown, getCsrfToken, state } from './state.js';
+import { $, $$, safeMarkdown, getCsrfToken, state, effortLabel } from './state.js';
+import { resetAudience, showAudienceControls } from './audience.js';
 
 export async function startBattle() {
     const prompt = $('#prompt').value.trim();
@@ -17,6 +18,7 @@ export async function startBattle() {
                 category: state.selectedCategory,
                 model_a: $('#select-model-a').value || null,
                 model_b: $('#select-model-b').value || null,
+                reasoning_effort: $('#reasoning-select').value || null,
             })
         });
 
@@ -56,6 +58,15 @@ function streamBattle(battleId) {
     $('#vote-section').classList.add('hidden');
     $('#skip-section').classList.add('hidden');
     $('#judge-section').classList.add('hidden');
+    resetAudience();
+    ['a', 'b'].forEach(side => {
+        const block = $(`#thinking-${side}`);
+        block.classList.add('hidden');
+        block.open = false;
+        $(`#thinking-${side}-body`).textContent = '';
+        $(`#thinking-${side}-meta`).textContent = '';
+        $(`#output-${side}`).style.color = '';
+    });
     const judgeBtn = $('#judge-btn');
     if (judgeBtn) {
         judgeBtn.disabled = false;
@@ -84,21 +95,53 @@ function streamBattle(battleId) {
         renderPanel('output-b', state.responseB, cursorB);
     });
 
+    // Thinking traces stream separately from the answer, into a collapsed block above it.
+    ['a', 'b'].forEach(side => {
+        source.addEventListener(`model_${side}_thinking`, (e) => {
+            const data = JSON.parse(e.data);
+            const block = $(`#thinking-${side}`);
+            const body = $(`#thinking-${side}-body`);
+            body.textContent += data.token;
+            if (block.classList.contains('hidden')) {
+                block.classList.remove('hidden');
+                block.open = true;
+            }
+            body.scrollTop = body.scrollHeight;
+        });
+        source.addEventListener(`model_${side}_notice`, (e) => {
+            const data = JSON.parse(e.data);
+            if (data.notice === 'reasoning_unsupported') {
+                $(`#status-${side}`).textContent = 'thinking not supported here, answering plainly';
+            }
+        });
+    });
+
     source.addEventListener('model_a_done', (e) => {
         doneA = true;
         state.battleMeta.a = JSON.parse(e.data);
+        // A replayed battle carries the full text on the done event instead of tokens.
+        if (!state.responseA && state.battleMeta.a.response) {
+            state.responseA = state.battleMeta.a.response;
+            renderPanel('output-a', state.responseA, cursorA);
+        }
         $('#status-a').textContent = '';
         if (cursorA.parentNode) cursorA.remove();
-        $('#footer-a').textContent = `${(state.battleMeta.a.latency_ms / 1000).toFixed(1)}s / ${state.battleMeta.a.tokens} tokens`;
+        $('#footer-a').textContent = footerText(state.battleMeta.a);
+        finishThinking('a', state.battleMeta.a);
         if (doneA && doneB) showVoteButtons();
     });
 
     source.addEventListener('model_b_done', (e) => {
         doneB = true;
         state.battleMeta.b = JSON.parse(e.data);
+        if (!state.responseB && state.battleMeta.b.response) {
+            state.responseB = state.battleMeta.b.response;
+            renderPanel('output-b', state.responseB, cursorB);
+        }
         $('#status-b').textContent = '';
         if (cursorB.parentNode) cursorB.remove();
-        $('#footer-b').textContent = `${(state.battleMeta.b.latency_ms / 1000).toFixed(1)}s / ${state.battleMeta.b.tokens} tokens`;
+        $('#footer-b').textContent = footerText(state.battleMeta.b);
+        finishThinking('b', state.battleMeta.b);
         if (doneA && doneB) showVoteButtons();
     });
 
@@ -134,6 +177,23 @@ function streamBattle(battleId) {
     });
 }
 
+function footerText(meta) {
+    let text = `${(meta.latency_ms / 1000).toFixed(1)}s / ${meta.tokens} tokens`;
+    if (meta.reasoning_effort) {
+        text += ` / ${effortLabel(meta.reasoning_effort)}`;
+        if (meta.reasoning_tokens) text += ` (${meta.reasoning_tokens} reasoning tokens)`;
+    }
+    return text;
+}
+
+function finishThinking(side, meta) {
+    const block = $(`#thinking-${side}`);
+    if (block.classList.contains('hidden')) return;
+    const chars = $(`#thinking-${side}-body`).textContent.length;
+    $(`#thinking-${side}-meta`).textContent = `(${chars.toLocaleString()} chars${meta.reasoning_tokens ? `, ${meta.reasoning_tokens} tokens` : ''})`;
+    block.open = false; // collapse once the answer is in, so the answer gets the space
+}
+
 function renderPanel(panelId, text, cursor) {
     const panel = $(`#${panelId}`);
     const rendered = safeMarkdown(text);
@@ -164,6 +224,8 @@ function showVoteButtons() {
     if (state.judgeEnabled && bothPresent) {
         $('#judge-section').classList.remove('hidden');
     }
+    // Audience vote needs both answers on screen, same as the judge.
+    if (bothPresent) showAudienceControls();
 }
 
 export async function requestJudgeVote() {
@@ -246,7 +308,8 @@ export async function loadPermalink(battleId) {
     }
 }
 
-function showReveal(data) {
+export function showReveal(data) {
+    resetAudience();
     $('#reveal-prompt').textContent = $('#battle-prompt').textContent;
 
     $('#reveal-output-a').innerHTML = safeMarkdown(state.responseA);
@@ -263,8 +326,9 @@ function showReveal(data) {
     const costA = data.cost_a > 0 ? `$${data.cost_a.toFixed(4)}` : 'free';
     const costB = data.cost_b > 0 ? `$${data.cost_b.toFixed(4)}` : 'free';
 
-    $('#reveal-meta-a').innerHTML = `<span class="provider-badge ${badgeA}">${badgeA}</span> / ${(data.latency_a_ms / 1000).toFixed(1)}s / ${data.tokens_a} tok / <span class="cost">${costA}</span>`;
-    $('#reveal-meta-b').innerHTML = `<span class="provider-badge ${badgeB}">${badgeB}</span> / ${(data.latency_b_ms / 1000).toFixed(1)}s / ${data.tokens_b} tok / <span class="cost">${costB}</span>`;
+    const effort = data.reasoning_effort ? ` / ${effortLabel(data.reasoning_effort)}` : '';
+    $('#reveal-meta-a').innerHTML = `<span class="provider-badge ${badgeA}">${badgeA}</span> / ${(data.latency_a_ms / 1000).toFixed(1)}s / ${data.tokens_a} tok / <span class="cost">${costA}</span>${effort}`;
+    $('#reveal-meta-b').innerHTML = `<span class="provider-badge ${badgeB}">${badgeB}</span> / ${(data.latency_b_ms / 1000).toFixed(1)}s / ${data.tokens_b} tok / <span class="cost">${costB}</span>${effort}`;
 
     const eloChangeA = data.rating_a_after - data.rating_a_before;
     const eloChangeB = data.rating_b_after - data.rating_b_before;
@@ -289,6 +353,18 @@ function showReveal(data) {
         verdictBlock.classList.remove('hidden');
     } else {
         verdictBlock.classList.add('hidden');
+    }
+
+    // Audience verdict — visible when a poll decided this battle.
+    const audienceBlock = $('#audience-verdict');
+    const tally = data.audience_tally;
+    if (data.vote_method === 'audience' && tally) {
+        const pick = data.winner === 'a' ? 'A wins' : data.winner === 'b' ? 'B wins' : 'tie';
+        $('#audience-verdict-body').textContent =
+            `${tally.total} vote${tally.total === 1 ? '' : 's'}: A ${tally.a} / tie ${tally.tie} / B ${tally.b}. Result: ${pick}.`;
+        audienceBlock.classList.remove('hidden');
+    } else {
+        audienceBlock.classList.add('hidden');
     }
 
     // Put the permalink in the address bar so the user can copy the URL directly.

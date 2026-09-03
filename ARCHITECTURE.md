@@ -65,9 +65,15 @@ The frontend opens an `EventSource` (SSE connection) to `/api/battle/{id}/stream
 - A blinking cursor element follows the end of the stream
 - When both models fire their `done` event, vote buttons appear
 
+### 4b. Thinking
+
+The toolbar's thinking selector sends `reasoning_effort` (low, medium, high) with the battle. `stream_battle` passes it to both provider calls unless the model's `reasoning: false`. If a provider answers 400, the call is retried once without the parameter and the client gets a `*_notice` event, so a non-thinking model still answers. Any `reasoning_content` the provider streams goes out as `model_a_thinking` / `model_b_thinking` events and renders in a collapsible block above the answer.
+
 ### 5. Voting and ELO
 
 User clicks A WINS, B WINS, or TIE. Frontend POSTs to `/api/battle/{id}/vote`.
+
+**Audience mode.** Instead of voting alone, the presenter can open a poll (`POST /api/battle/{id}/poll`). The server mints a six-character code; phones open `/vote/<code>`, which sits outside the passphrase gate and can only read the two finished responses and record one choice per device. Closing the poll records the plurality as a vote with `method = "audience"` and the tally on the vote log, then the phones show the reveal.
 
 **`app/store.py` — `record_vote()`**
 - Updates both the "overall" and category-specific ratings
@@ -107,15 +113,24 @@ After voting, the backend returns both model identities, latency, token counts, 
 
 ```
 app/
-  main.py      — FastAPI routes, app lifecycle, static file serving
-  arena.py     — Model selection, streaming battle logic, cost estimation
-  store.py     — SQLite operations, ELO updates, vote logging
-  config.py    — YAML config loader, dataclasses for Provider/Model/Config
-  models.py    — Pydantic request/response schemas
+  main.py          — FastAPI app, auth middleware, battle/vote/leaderboard routes
+  runtime.py       — Process-wide singletons (config, store, suites, rate limiters)
+  routes_polls.py  — Audience polls: presenter endpoints + the public phone endpoints
+  routes_suites.py — Eval-suite routes and the background suite runner
+  arena.py         — Model selection, reasoning_effort handling, streaming battle logic
+  store.py         — SQLite operations, ELO updates, vote logging, poll tables
+  config.py        — YAML config loader, dataclasses for Provider/Model/Config
+  models.py        — Pydantic request/response schemas
+  payloads.py      — Shared reveal payload builder
+  clientip.py      — Client IP resolution behind trusted proxies
 
 static/
   index.html   — Single page with all views (arena, battle, reveal, leaderboard)
-  app.js       — Frontend logic: streaming, voting, leaderboard, routing
+  vote.html    — Public audience page for one poll code (phones)
+  js/app.js    — Entry point: routing, selectors, feature flags
+  js/battle.js — Streaming, thinking traces, voting, reveal
+  js/audience.js — Presenter side of an audience poll (QR, live tally, close)
+  js/vote.js   — Phone side of an audience poll
   style.css    — All styling including responsive/mobile
 
 models.yaml    — Provider endpoints and model definitions

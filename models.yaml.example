@@ -37,6 +37,11 @@ models:
     output_cost_per_1m: 10.0
     categories: [general, coding, reasoning, creative]
     enabled: true
+    # reasoning: controls the "thinking" selector in the arena UI.
+    #   (omitted)  auto: send reasoning_effort when asked, retry without it on a 400
+    #   true       the model supports reasoning_effort; a 400 is a real error
+    #   false      never send reasoning_effort to this model
+    # reasoning: false
 
   - id: gpt-4o-mini
     provider: openai

@@ -33,7 +33,9 @@ Two models get the same prompt. You read both responses without knowing which mo
 
 **The core:**
 - **Blind comparison** -- models are hidden until after you vote, so the response speaks for itself
-- **Targeted comparison** -- skip the mystery match and pick two specific models to go head-to-head
+- **Targeted comparison** -- skip the mystery match and pick two specific models to go head-to-head, or pick one and let the arena draw its opponent
+- **Thinking selector** -- choose off / low / medium / high per battle; sent as `reasoning_effort`, with the thinking trace streamed into a collapsible block when the provider returns one
+- **Audience vote** -- open a poll on any finished battle, put the QR code on the projector, and let a room full of phones decide. The plurality becomes the recorded vote, and the phones see the reveal when you close it
 - **Real-time streaming** -- both responses stream simultaneously via Server-Sent Events
 - **ELO leaderboard** -- standard rating system (K=32), filterable by category, with provisional thresholds
 
@@ -104,6 +106,7 @@ models:
 - `api_key` sets the key directly (for local services like Ollama)
 - `categories` controls which battles a model can appear in
 - Set `enabled: false` to temporarily remove a model
+- `reasoning` is optional: `true` means the model accepts `reasoning_effort`, `false` means never send it, and leaving it out means the arena tries it and falls back to a plain call if the provider returns a 400
 - Models are randomly paired; the system avoids pairing two local models together
 
 ### Environment Variables
@@ -113,6 +116,8 @@ models:
 | `ARENA_PASSPHRASE` | Yes | Passphrase users enter to access the arena |
 | `AUTH_TOKEN_SECRET` | Yes | Secret key for signing auth tokens (`openssl rand -hex 32`) |
 | `GATEWAY_API_KEY` | No | API key for your gateway provider |
+| `COOKIE_SECURE` | No | Set to `false` only when serving plain HTTP on a LAN; the login cookie is otherwise dropped by the browser (default: `true`) |
+| `TRUSTED_PROXIES` | No | Comma-separated proxy IPs/CIDRs whose `X-Forwarded-For` is honored for rate limiting |
 | `TZ` | No | Timezone for "battles today" stat (default: `America/New_York`) |
 
 The app will refuse to start without `ARENA_PASSPHRASE` and `AUTH_TOKEN_SECRET`.
@@ -130,9 +135,11 @@ The app will refuse to start without `ARENA_PASSPHRASE` and `AUTH_TOKEN_SECRET`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/battle` | Start a battle |
-| `GET` | `/api/battle/{id}/stream` | SSE stream |
+| `POST` | `/api/battle` | Start a battle (`model_a`, `model_b`, `reasoning_effort` optional) |
+| `GET` | `/api/battle/{id}/stream` | SSE stream (answer tokens plus `*_thinking` events) |
 | `POST` | `/api/battle/{id}/vote` | Cast a vote |
+| `POST` | `/api/battle/{id}/poll` | Open an audience poll; `GET` for the live tally; `POST .../close` to record the plurality |
+| `GET` | `/vote/{code}` | Public phone page for an audience poll (`/api/audience/{code}` behind it) |
 | `GET` | `/api/leaderboard?category=overall` | ELO rankings |
 | `GET` | `/api/models` | List enabled models |
 | `GET` | `/api/export?format=csv` | Download battle history |
@@ -150,7 +157,6 @@ for the full plan. Headline features on deck:
 - **API tokens** — headless suite runs from CI
 - **Prometheus `/metrics`** — battles, votes, latency, cost
 - **Battle permalinks** — shareable URL for team review
-- **Reasoning-trace toggle** — thinking-model support (R1, o-series, GPT-5.3)
 
 ## Contributing + Security
 
