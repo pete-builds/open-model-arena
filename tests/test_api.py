@@ -815,7 +815,6 @@ async def test_judge_endpoint_409_when_already_voted(client, auth_headers, monke
 
 @pytest.mark.asyncio
 async def test_list_suites_empty_by_default(client, auth_headers_get):
-
     # example config doesn't ship a suites dir loaded in tests
     resp = await client.get("/api/suites", headers=auth_headers_get)
     assert resp.status_code == 200
@@ -826,7 +825,6 @@ async def test_list_suites_empty_by_default(client, auth_headers_get):
 
 @pytest.mark.asyncio
 async def test_get_suite_404_for_unknown(client, auth_headers_get, monkeypatch):
-
     monkeypatch.setattr(runtime, "suites", {})
     resp = await client.get("/api/suites/nope", headers=auth_headers_get)
     assert resp.status_code == 404
