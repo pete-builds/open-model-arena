@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Thinking selector.** The arena toolbar gained a per-battle thinking
+  control (off / low / medium / high). It is sent as `reasoning_effort`
+  to both models and stored on the battle row, the export, and the
+  reveal. Providers that stream `reasoning_content` get a collapsible
+  thinking block above the answer with a character and reasoning-token
+  count. A provider that rejects the parameter with a 400 is retried
+  once without it and the panel says so, so a non-thinking model still
+  answers. A new optional per-model `reasoning:` key in `models.yaml`
+  (`true` / `false` / absent = auto) pins that behavior.
+- **Pick one model, draw the other.** The model selectors no longer
+  require both sides. Choose one and the arena draws a random opponent
+  from the same category, keeping the never-two-local rule.
+- **Audience vote.** After both responses finish, a "let the audience
+  vote" button opens a poll: a six-character join code, a QR code, and a
+  live tally on the presenter's screen. Phones open `/vote/<code>`,
+  which is public (no passphrase), read-only on the battle, and limited
+  to one changeable choice per device. Closing the poll records the
+  plurality as the battle's vote with `method = "audience"` and the
+  tally on the vote log; the phones then see the reveal. Polls expire
+  six hours after opening, cap at 1,000 voters, and the public vote
+  endpoint is rate-limited per IP. New tables `polls` and `poll_votes`,
+  new columns `battles.reasoning_effort` and `vote_log.audience_tally`,
+  all additive.
+- **`COOKIE_SECURE` env var.** Defaults to `true`. Operators serving
+  plain HTTP on a LAN can set it to `false` instead of patching
+  `main.py` on the host.
+
+### Changed
+
+- `main.py` was split: shared singletons moved to `app/runtime.py`,
+  suite routes to `app/routes_suites.py`, client IP resolution to
+  `app/clientip.py`, and the three copies of the reveal dict collapsed
+  into `app/payloads.py`. No route or payload changed shape.
+
 ### Fixed
 
 - **X-Forwarded-For only trusted from allow-listed proxies.** New

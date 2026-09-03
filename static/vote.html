@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex">
+    <title>Audience Vote · Open Model Arena</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH" crossorigin="anonymous">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js" integrity="sha384-3zf4Pen4fXU90jGg3cxmo7BF4dq8HMtF2s07c/Hhd1Fh+Encm6ApPvNm8vrMJbWu" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.9/purify.min.js" integrity="sha384-3HPB1XT51W3gGRxAmZ+qbZwRpRlFQL632y8x+adAqCr4Wp3TaWwCLSTAJJKbyWEK" crossorigin="anonymous"></script>
+</head>
+<body class="audience-body">
+    <div class="container audience-page">
+        <header class="audience-header">
+            <div class="logo">OPEN MODEL ARENA</div>
+            <div class="audience-subtitle">audience vote · code <span class="mono" id="av-code"></span></div>
+        </header>
+
+        <div id="av-loading" class="audience-status">loading the battle…</div>
+        <div id="av-error" class="audience-status hidden"></div>
+
+        <main id="av-main" class="hidden">
+            <div class="prompt-display" id="av-prompt"></div>
+
+            <section class="audience-responses">
+                <details class="audience-response side-a" id="av-details-a" open>
+                    <summary>Model A <span class="audience-response-hint">tap to collapse</span></summary>
+                    <div class="panel-body audience-panel-body" id="av-output-a"></div>
+                </details>
+                <details class="audience-response side-b" id="av-details-b" open>
+                    <summary>Model B <span class="audience-response-hint">tap to collapse</span></summary>
+                    <div class="panel-body audience-panel-body" id="av-output-b"></div>
+                </details>
+            </section>
+
+            <section class="audience-vote" id="av-vote">
+                <div class="audience-question">Which response is better?</div>
+                <div class="vote-section audience-buttons">
+                    <button class="vote-btn vote-a" data-choice="a" type="button">A IS BETTER</button>
+                    <button class="vote-btn vote-tie" data-choice="tie" type="button">TIE</button>
+                    <button class="vote-btn vote-b" data-choice="b" type="button">B IS BETTER</button>
+                </div>
+                <div class="audience-feedback" id="av-feedback"></div>
+                <div class="audience-count-line"><span id="av-count">0</span> votes in so far</div>
+            </section>
+
+            <section class="audience-result hidden" id="av-result">
+                <div class="audience-question">Poll closed</div>
+                <div class="audience-winner" id="av-winner"></div>
+                <div class="audience-tally">
+                    <div class="tally-row tally-a"><span class="tally-label" id="av-label-a">A</span><div class="tally-bar"><div class="tally-fill" id="av-fill-a"></div></div><span class="tally-count" id="av-tally-a">0</span></div>
+                    <div class="tally-row tally-tie"><span class="tally-label">TIE</span><div class="tally-bar"><div class="tally-fill" id="av-fill-tie"></div></div><span class="tally-count" id="av-tally-tie">0</span></div>
+                    <div class="tally-row tally-b"><span class="tally-label" id="av-label-b">B</span><div class="tally-bar"><div class="tally-fill" id="av-fill-b"></div></div><span class="tally-count" id="av-tally-b">0</span></div>
+                </div>
+                <div class="audience-reveal-names">
+                    <div><span class="side-tag side-tag-a">A</span> was <strong id="av-name-a"></strong></div>
+                    <div><span class="side-tag side-tag-b">B</span> was <strong id="av-name-b"></strong></div>
+                </div>
+                <div class="audience-feedback" id="av-your-pick"></div>
+            </section>
+        </main>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-main">Blind comparison. The models are revealed when the presenter closes the poll.</div>
+    </footer>
+    <script type="module" src="/js/vote.js"></script>
+</body>
+</html>

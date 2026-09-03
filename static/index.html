@@ -13,6 +13,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js" integrity="sha384-3zf4Pen4fXU90jGg3cxmo7BF4dq8HMtF2s07c/Hhd1Fh+Encm6ApPvNm8vrMJbWu" crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.9/purify.min.js" integrity="sha384-3HPB1XT51W3gGRxAmZ+qbZwRpRlFQL632y8x+adAqCr4Wp3TaWwCLSTAJJKbyWEK" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU" crossorigin="anonymous"></script>
 </head>
 <body>
     <div class="container">
@@ -50,9 +51,15 @@
                         <option value="reasoning">reasoning</option>
                         <option value="creative">creative</option>
                     </select>
-                    <select id="select-model-a" class="model-select"><option value="">mystery match</option></select>
+                    <select id="select-model-a" class="model-select" title="Model A: pick one or leave it to chance"><option value="">mystery match</option></select>
                     <span class="vs-label">vs</span>
-                    <select id="select-model-b" class="model-select"><option value="">mystery match</option></select>
+                    <select id="select-model-b" class="model-select" title="Model B: pick one or leave it to chance"><option value="">mystery match</option></select>
+                    <select id="reasoning-select" class="model-select reasoning-select" title="Thinking effort: sent as reasoning_effort to models that support it">
+                        <option value="">thinking: off</option>
+                        <option value="low">thinking: low</option>
+                        <option value="medium">thinking: medium</option>
+                        <option value="high">thinking: high</option>
+                    </select>
                 </div>
                 <div class="toolbar-actions">
                     <button class="btn-link" id="save-template-btn" title="save as template">+ template</button>
@@ -86,6 +93,10 @@
                     <div class="panel-header">
                         Model A <span class="streaming-indicator" id="status-a"></span>
                     </div>
+                    <details class="thinking-block hidden" id="thinking-a">
+                        <summary>thinking <span class="thinking-meta" id="thinking-a-meta"></span></summary>
+                        <pre class="thinking-body" id="thinking-a-body"></pre>
+                    </details>
                     <div class="panel-body" id="output-a"></div>
                     <div class="panel-footer" id="footer-a"></div>
                 </div>
@@ -93,6 +104,10 @@
                     <div class="panel-header">
                         Model B <span class="streaming-indicator" id="status-b"></span>
                     </div>
+                    <details class="thinking-block hidden" id="thinking-b">
+                        <summary>thinking <span class="thinking-meta" id="thinking-b-meta"></span></summary>
+                        <pre class="thinking-body" id="thinking-b-body"></pre>
+                    </details>
                     <div class="panel-body" id="output-b"></div>
                     <div class="panel-footer" id="footer-b"></div>
                 </div>
@@ -107,6 +122,30 @@
                 <button class="btn-link" id="judge-btn" type="button">
                     let <span id="judge-model-name">the judge</span> decide
                 </button>
+            </div>
+            <div class="audience-section hidden" id="audience-section">
+                <button class="btn-link" id="audience-open-btn" type="button">let the audience vote (phones)</button>
+            </div>
+            <div class="audience-panel hidden" id="audience-panel">
+                <div class="audience-join">
+                    <div class="audience-qr" id="audience-qr"></div>
+                    <div class="audience-join-text">
+                        <div class="audience-label">scan, or open</div>
+                        <div class="audience-url" id="audience-url"></div>
+                        <div class="audience-code-label">code</div>
+                        <div class="audience-code" id="audience-code"></div>
+                    </div>
+                </div>
+                <div class="audience-tally">
+                    <div class="tally-row tally-a"><span class="tally-label">A</span><div class="tally-bar"><div class="tally-fill" id="tally-fill-a"></div></div><span class="tally-count" id="tally-count-a">0</span></div>
+                    <div class="tally-row tally-tie"><span class="tally-label">TIE</span><div class="tally-bar"><div class="tally-fill" id="tally-fill-tie"></div></div><span class="tally-count" id="tally-count-tie">0</span></div>
+                    <div class="tally-row tally-b"><span class="tally-label">B</span><div class="tally-bar"><div class="tally-fill" id="tally-fill-b"></div></div><span class="tally-count" id="tally-count-b">0</span></div>
+                    <div class="audience-total"><span id="audience-total">0</span> votes in <span class="audience-live" id="audience-live">live</span></div>
+                </div>
+                <div class="audience-actions">
+                    <button class="btn-poll-close" id="audience-close-btn" type="button">CLOSE POLL &amp; REVEAL</button>
+                    <span class="audience-hint">the audience's plurality becomes this battle's vote</span>
+                </div>
             </div>
             <div class="skip-section hidden" id="skip-section">
                 <button class="btn-link" id="skip-btn">skip (don't vote)</button>
@@ -124,6 +163,10 @@
             <div class="verdict-block hidden" id="judge-verdict">
                 <div class="verdict-label">Judged by <span id="verdict-judge-name"></span></div>
                 <div class="verdict-body" id="verdict-reasoning"></div>
+            </div>
+            <div class="verdict-block hidden" id="audience-verdict">
+                <div class="verdict-label">Decided by the audience</div>
+                <div class="verdict-body" id="audience-verdict-body"></div>
             </div>
             <div class="battle-panels">
                 <div class="panel side-a">

@@ -21,6 +21,7 @@ export default defineConfig({
         {
           label: 'Guides',
           items: [
+            { label: 'Classroom Mode', link: '/guides/classroom/' },
             { label: 'Eval Suites', link: '/guides/eval-suites/' },
             { label: 'LLM-as-Judge', link: '/guides/judge-mode/' },
             { label: 'Headless API', link: '/guides/headless-api/' },

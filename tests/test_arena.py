@@ -3,9 +3,19 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from openai import BadRequestError
 
-from app.arena import estimate_cost, get_client, select_models, stream_battle
+from app.arena import (
+    completion_kwargs,
+    estimate_cost,
+    get_client,
+    normalize_reasoning_effort,
+    pick_opponent,
+    select_models,
+    stream_battle,
+)
 from app.config import Config, Model, Provider
 
 
@@ -302,6 +312,7 @@ async def test_stream_battle_replays_on_second_call(test_config, test_store):
     assert counter["n"] == calls_after_first, "second stream must not fire new model calls"
     second_text = "".join(second)
     assert "replayed" in second_text
+    assert '"reasoning_effort"' in second_text  # replayed done events carry the effort too
     assert "battle_complete" in second_text
     # Also assert the first stream really completed (baseline sanity).
     assert "battle_complete" in "".join(first)
@@ -350,3 +361,166 @@ async def test_stream_battle_concurrent_only_runs_once(test_config, test_store):
     # One of the two must be a winning stream (has battle_complete without "replayed").
     winning = [t for t in texts if "battle_complete" in t and '"replayed": true' not in t]
     assert len(winning) == 1, f"expected exactly one non-replayed winner, got {len(winning)}"
+
+
+# --- reasoning effort + opponent picking ---
+
+
+def test_normalize_reasoning_effort():
+    assert normalize_reasoning_effort(None) is None
+    assert normalize_reasoning_effort("off") is None
+    assert normalize_reasoning_effort("") is None
+    assert normalize_reasoning_effort(" High ") == "high"
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        normalize_reasoning_effort("max")
+
+
+def test_completion_kwargs_respects_model_flag(test_config):
+    model = test_config.get_model("model-alpha")
+    assert completion_kwargs(model, None) == {}
+    assert completion_kwargs(model, "low") == {"reasoning_effort": "low"}
+    model.reasoning = False
+    assert completion_kwargs(model, "low") == {}
+    model.reasoning = None
+
+
+def test_pick_opponent_never_returns_chosen(test_config):
+    chosen = test_config.get_model("model-alpha")
+    for _ in range(20):
+        opp = pick_opponent(test_config, "general", chosen)
+        assert opp.id != chosen.id
+        assert "general" in opp.categories
+        assert opp.enabled
+
+
+def test_pick_opponent_local_chosen_prefers_gateway(test_config):
+    chosen = test_config.get_model("model-local")
+    for _ in range(20):
+        opp = pick_opponent(test_config, "general", chosen)
+        assert opp.provider_name == "test-gateway"
+
+
+def test_pick_opponent_no_candidates_raises(test_config):
+    chosen = test_config.get_model("model-alpha")
+    with pytest.raises(ValueError, match="no other enabled model"):
+        pick_opponent(test_config, "nonexistent-category", chosen)
+
+
+def _mock_stream(chunks):
+    async def mock_create(**kwargs):
+        mock_stream = AsyncMock()
+        mock_stream.__aiter__ = lambda self: self
+        mock_stream._items = list(chunks)
+
+        async def anext_impl(self):
+            if self._items:
+                return self._items.pop(0)
+            raise StopAsyncIteration
+
+        mock_stream.__anext__ = anext_impl
+        return mock_stream
+
+    return mock_create
+
+
+def _bad_request() -> BadRequestError:
+    request = httpx.Request("POST", "http://fake/v1/chat/completions")
+    response = httpx.Response(400, request=request)
+    return BadRequestError("unsupported parameter: reasoning_effort", response=response, body=None)
+
+
+@pytest.mark.asyncio
+async def test_stream_passes_reasoning_effort_and_thinking(test_config, test_store):
+    """reasoning_effort reaches the provider call; reasoning_content streams as *_thinking events."""
+    battle_id = await test_store.create_battle("Hi", "general", "model-alpha", "model-beta", reasoning_effort="high")
+
+    seen_kwargs = []
+
+    think_chunk = MagicMock()
+    choice = MagicMock()
+    choice.delta.content = None
+    choice.delta.reasoning_content = "let me think"
+    think_chunk.choices = [choice]
+    think_chunk.usage = None
+
+    usage = MagicMock()
+    usage.prompt_tokens = 10
+    usage.completion_tokens = 5
+    usage.completion_tokens_details.reasoning_tokens = 7
+    chunks = [think_chunk, _make_mock_chunk(content="answer"), _make_mock_chunk(usage=usage)]
+
+    inner = _mock_stream(chunks)
+
+    async def mock_create(**kwargs):
+        seen_kwargs.append(kwargs)
+        return await inner(**kwargs)
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = mock_create
+
+    with patch("app.arena.get_client", return_value=mock_client):
+        events = await _collect_events(stream_battle(test_config, test_store, battle_id))
+
+    assert all(k.get("reasoning_effort") == "high" for k in seen_kwargs)
+    text = "".join(events)
+    assert "model_a_thinking" in text and "let me think" in text
+    assert '"reasoning_effort": "high"' in text
+    assert '"reasoning_tokens": 7' in text
+    assert "battle_complete" in text
+
+
+@pytest.mark.asyncio
+async def test_stream_falls_back_when_provider_rejects_reasoning(test_config, test_store):
+    """A 400 on reasoning_effort retries once without it and tells the client."""
+    battle_id = await test_store.create_battle("Hi", "general", "model-alpha", "model-beta", reasoning_effort="low")
+
+    calls = []
+    inner = _mock_stream([_make_mock_chunk(content="plain answer")])
+
+    async def mock_create(**kwargs):
+        calls.append(kwargs)
+        if "reasoning_effort" in kwargs:
+            raise _bad_request()
+        return await inner(**kwargs)
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = mock_create
+
+    with patch("app.arena.get_client", return_value=mock_client):
+        events = await _collect_events(stream_battle(test_config, test_store, battle_id))
+
+    text = "".join(events)
+    assert "reasoning_unsupported" in text
+    assert "plain answer" in text
+    assert '"reasoning_effort": null' in text
+    assert "battle_complete" in text
+    # two sides x (one rejected + one retry) = 4 calls
+    assert len(calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_stream_no_fallback_when_model_declares_reasoning(test_config, test_store):
+    """reasoning: true means a 400 is a real error, not a signal to retry without thinking."""
+    battle_id = await test_store.create_battle("Hi", "general", "model-alpha", "model-beta", reasoning_effort="low")
+    test_config.get_model("model-alpha").reasoning = True
+    test_config.get_model("model-beta").reasoning = True
+
+    calls = []
+
+    async def mock_create(**kwargs):
+        calls.append(kwargs)
+        raise _bad_request()
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = mock_create
+
+    try:
+        with patch("app.arena.get_client", return_value=mock_client):
+            events = await _collect_events(stream_battle(test_config, test_store, battle_id))
+    finally:
+        test_config.get_model("model-alpha").reasoning = None
+        test_config.get_model("model-beta").reasoning = None
+
+    text = "".join(events)
+    assert "model_a_error" in text and "model_b_error" in text
+    assert len(calls) == 2

@@ -6,10 +6,12 @@ import logging
 import random
 import time
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
-from .config import Config, Model
+from .config import REASONING_EFFORTS, Config, Model
 from .store import EXEC_STATE_COMPLETE, EXEC_STATE_ERROR
+
+log = logging.getLogger("arena")
 
 
 def select_models(config: Config, category: str) -> tuple[Model, Model]:
@@ -45,6 +47,63 @@ def select_models(config: Config, category: str) -> tuple[Model, Model]:
         a, b = b, a
 
     return a, b
+
+
+def pick_opponent(config: Config, category: str, chosen: Model) -> Model:
+    """Pick a random opponent for one explicitly chosen model.
+
+    Same rules as ``select_models``: enabled, in the category, never the same
+    model, and never two local models against each other when a gateway
+    model is available.
+    """
+    candidates = [m for m in config.enabled_models(category) if m.id != chosen.id]
+    if not candidates:
+        raise ValueError(f"no other enabled model in category '{category}' to face {chosen.id}")
+    local_providers = {name for name, p in config.providers.items() if p.local}
+    if chosen.provider_name in local_providers:
+        gateway = [m for m in candidates if m.provider_name not in local_providers]
+        if gateway:
+            candidates = gateway
+    return random.choice(candidates)
+
+
+def normalize_reasoning_effort(value: str | None) -> str | None:
+    """Map the request field to a provider value: None/'off' → None, else one of REASONING_EFFORTS."""
+    if value is None:
+        return None
+    value = value.strip().lower()
+    if value in ("", "off", "none", "default"):
+        return None
+    if value not in REASONING_EFFORTS:
+        raise ValueError(f"reasoning_effort must be one of: off, {', '.join(REASONING_EFFORTS)}")
+    return value
+
+
+def completion_kwargs(model: Model, reasoning_effort: str | None) -> dict:
+    """Extra chat-completion kwargs for a model, honoring its ``reasoning`` setting."""
+    if reasoning_effort and model.reasoning is not False:
+        return {"reasoning_effort": reasoning_effort}
+    return {}
+
+
+def _reasoning_delta(delta) -> str | None:
+    """Pull streamed thinking text off a delta, whichever field the provider uses.
+
+    LiteLLM and DeepSeek send ``reasoning_content``; a few gateways send
+    ``reasoning``. Both are extra fields on the SDK model, so read them
+    defensively and only accept real strings (mocks and None fall through).
+    """
+    for attr in ("reasoning_content", "reasoning"):
+        val = getattr(delta, attr, None)
+        if isinstance(val, str) and val:
+            return val
+    return None
+
+
+def _reasoning_tokens(usage) -> int:
+    details = getattr(usage, "completion_tokens_details", None)
+    val = getattr(details, "reasoning_tokens", None) if details is not None else None
+    return val if isinstance(val, int) else 0
 
 
 def get_client(config: Config, model: Model) -> AsyncOpenAI:
@@ -88,19 +147,34 @@ async def run_battle_headless(config: Config, store, battle_id: str) -> dict:
 
     prompt = battle["prompt"]
     messages = [{"role": "user", "content": prompt}]
+    effort = battle.get("reasoning_effort")
 
     async def _one(model: Model, side: str) -> dict:
         client = get_client(config, model)
         provider = config.get_provider(model.provider_name)
         timeout_s = provider.timeout or 60
         start = time.monotonic()
+        extra = completion_kwargs(model, effort)
         try:
-            resp = await client.chat.completions.create(
-                model=model.model_id,
-                messages=messages,
-                max_tokens=2048,
-                timeout=timeout_s,
-            )
+            try:
+                resp = await client.chat.completions.create(
+                    model=model.model_id,
+                    messages=messages,
+                    max_tokens=2048,
+                    timeout=timeout_s,
+                    **extra,
+                )
+            except BadRequestError:
+                if not extra or model.reasoning is True:
+                    raise
+                # Provider rejected reasoning_effort: retry once without it.
+                log.warning("model %s rejected reasoning_effort=%s; retrying without", model.id, effort)
+                resp = await client.chat.completions.create(
+                    model=model.model_id,
+                    messages=messages,
+                    max_tokens=2048,
+                    timeout=timeout_s,
+                )
         except Exception as e:
             return {"error": str(e)}
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -137,6 +211,7 @@ def _replay_side_event(battle: dict, side: str) -> str:
         "latency_ms": battle[f"latency_{side}_ms"] or 0,
         "tokens": battle[f"tokens_{side}"] or 0,
         "cost": battle[f"cost_{side}"] or 0.0,
+        "reasoning_effort": battle.get("reasoning_effort"),
         "replayed": True,
     }
     return f"event: {label}_done\ndata: {json.dumps(payload)}\n\n"
@@ -190,6 +265,7 @@ async def stream_battle(config: Config, store, battle_id: str):
 
     prompt = battle["prompt"]
     messages = [{"role": "user", "content": prompt}]
+    effort = battle.get("reasoning_effort")
 
     results = {"a": {}, "b": {}}
     queues = {"a": asyncio.Queue(), "b": asyncio.Queue()}
@@ -199,22 +275,45 @@ async def stream_battle(config: Config, store, battle_id: str):
         timeout_s = provider.timeout or 60
         start = time.monotonic()
         full_response = []
+        thinking = []
         usage_data = None
+        extra = completion_kwargs(model, effort)
+        applied_effort = effort if extra else None
 
-        async def _stream():
-            nonlocal usage_data
-            stream = await client.chat.completions.create(
+        async def _open_stream(kwargs: dict):
+            return await client.chat.completions.create(
                 model=model.model_id,
                 messages=messages,
                 stream=True,
                 stream_options={"include_usage": True},
                 max_tokens=2048,
+                **kwargs,
             )
+
+        async def _stream():
+            nonlocal usage_data, applied_effort
+            try:
+                stream = await _open_stream(extra)
+            except BadRequestError:
+                if not extra or model.reasoning is True:
+                    raise
+                # Provider rejected reasoning_effort: retry once without it so
+                # a non-thinking model still answers instead of erroring out.
+                log.warning("model %s rejected reasoning_effort=%s; retrying without", model.id, effort)
+                applied_effort = None
+                await queues[side].put(("reasoning_unsupported", None))
+                stream = await _open_stream({})
             async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    delta = chunk.choices[0].delta.content
-                    full_response.append(delta)
-                    await queues[side].put(("token", delta))
+                if chunk.choices:
+                    delta_obj = chunk.choices[0].delta
+                    think = _reasoning_delta(delta_obj)
+                    if think:
+                        thinking.append(think)
+                        await queues[side].put(("thinking", think))
+                    if delta_obj.content:
+                        delta = delta_obj.content
+                        full_response.append(delta)
+                        await queues[side].put(("token", delta))
                 if chunk.usage:
                     usage_data = chunk.usage
 
@@ -249,6 +348,9 @@ async def stream_battle(config: Config, store, battle_id: str):
             "latency_ms": elapsed_ms,
             "tokens": output_tokens,
             "cost": round(cost, 6),
+            "reasoning_effort": applied_effort,
+            "reasoning_tokens": _reasoning_tokens(usage_data),
+            "thinking_chars": sum(len(t) for t in thinking),
         }
 
         update = store.update_response_a if side == "a" else store.update_response_b
@@ -273,6 +375,10 @@ async def stream_battle(config: Config, store, battle_id: str):
                     msg_type, data = queues[side].get_nowait()
                     if msg_type == "token":
                         yield f"event: {label}\ndata: {json.dumps({'token': data})}\n\n"
+                    elif msg_type == "thinking":
+                        yield f"event: {label}_thinking\ndata: {json.dumps({'token': data})}\n\n"
+                    elif msg_type == "reasoning_unsupported":
+                        yield f"event: {label}_notice\ndata: {json.dumps({'notice': 'reasoning_unsupported'})}\n\n"
                     elif msg_type == "error":
                         errored = True
                         yield f"event: {label}_error\ndata: {json.dumps({'error': data})}\n\n"

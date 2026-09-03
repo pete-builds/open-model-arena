@@ -31,6 +31,14 @@ class Model:
     output_cost_per_1m: float
     categories: list[str] = field(default_factory=list)
     enabled: bool = True
+    # Thinking / reasoning-effort support. None means "auto": the arena sends
+    # ``reasoning_effort`` when the user asks for it and falls back to a plain
+    # call if the provider rejects the parameter. True skips the fallback
+    # (the model is known to support it); False never sends it.
+    reasoning: bool | None = None
+
+
+REASONING_EFFORTS = ("low", "medium", "high")
 
 
 DEFAULT_JUDGE_RUBRIC = """You are an impartial judge comparing two AI responses to the same prompt.
@@ -86,6 +94,15 @@ class Config:
         return self.get_model(self.judge.model_id)
 
 
+def _parse_reasoning(model_id: str | None, raw) -> bool | None:
+    """Validate the optional per-model ``reasoning`` key: true, false, or absent/auto."""
+    if raw is None or raw == "auto":
+        return None
+    if isinstance(raw, bool):
+        return raw
+    raise ConfigError(f"model '{model_id}': 'reasoning' must be true, false, or auto (got {raw!r})")
+
+
 def load_config(path: str = "models.yaml") -> Config:
     try:
         with open(path) as f:
@@ -126,6 +143,7 @@ def load_config(path: str = "models.yaml") -> Config:
                 output_cost_per_1m=m.get("output_cost_per_1m", 0.0),
                 categories=m.get("categories", []),
                 enabled=m.get("enabled", True),
+                reasoning=_parse_reasoning(m.get("id"), m.get("reasoning")),
             )
         )
 

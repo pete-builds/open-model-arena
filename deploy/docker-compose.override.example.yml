@@ -20,3 +20,12 @@ services:
     # bridge subnet is exhausted on a shared host).
     # network_mode: host
     # ports: !reset []
+
+    # Optional: build from the checked-out source instead of pulling GHCR.
+    # Keep the base compose file untouched so `git pull` never conflicts.
+    # build: .
+    # image: open-model-arena:local
+
+    # Optional: plain-HTTP LAN port (no TLS in front). See .env.example.
+    # environment:
+    #   - COOKIE_SECURE=false
