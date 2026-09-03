@@ -10,10 +10,17 @@ live container with zero manual steps.
 
 ## The stages
 
-1. **Release workflow bumps the public compose file.** `release.yml` runs
-   `sed` on `docker-compose.yml` to point at the new version. That commit
-   goes back to `main` with `[skip ci]`. Anyone who does `git pull` picks
-   up the new pin.
+1. **Cutting the release bumps the public compose file.** The release
+   commit moves `pyproject.toml`, `CHANGELOG.md` and the pinned tag in
+   `docker-compose.yml` together, then gets tagged. Anyone who does
+   `git pull` picks up the new pin.
+
+   A workflow job used to push that bump back to `main` on its own. It
+   could never work: `main` requires status checks, the bot has no admin
+   bypass, so the push was rejected with `GH006`, and its `[skip ci]`
+   marker meant the required checks would never run on that commit
+   either. Bumping in the release commit is atomic and needs no
+   elevated token.
 2. **Host-specific override** (`docker-compose.override.yml`, gitignored)
    keeps the actual pin your host is running. Docker Compose merges it in
    automatically. Never edit the base `docker-compose.yml` on the host —

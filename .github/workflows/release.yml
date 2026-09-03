@@ -13,9 +13,35 @@ permissions:
   attestations: write
 
 jobs:
+  verify-version:
+    name: Tag matches pyproject and compose pin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The compose pin used to be bumped by a bot push, which branch
+      # protection always rejected. It is bumped in the release commit now,
+      # so this job is the thing that catches a forgotten bump - before an
+      # image is published under a tag the repo disagrees with.
+      - name: Compare tag against the tree
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${REF_NAME#v}"
+          PYPROJECT=$(sed -nE 's/^version = "(.*)"$/\1/p' pyproject.toml | head -1)
+          COMPOSE=$(sed -nE 's|.*ghcr\.io/pete-builds/open-model-arena:([0-9]+\.[0-9]+\.[0-9]+).*|\1|p' docker-compose.yml | head -1)
+          echo "tag=${VERSION}  pyproject=${PYPROJECT}  compose=${COMPOSE}"
+          fail=0
+          [ "$PYPROJECT" = "$VERSION" ] || { echo "::error::pyproject.toml is ${PYPROJECT}, tag is ${VERSION}"; fail=1; }
+          [ "$COMPOSE" = "$VERSION" ] || { echo "::error::docker-compose.yml pins ${COMPOSE}, tag is ${VERSION}"; fail=1; }
+          grep -q "^## \[${VERSION}\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no [${VERSION}] section"; fail=1; }
+          exit $fail
+
   build-and-push:
     name: Build + push container image
     runs-on: ubuntu-latest
+    needs: verify-version
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -63,41 +89,6 @@ jobs:
           subject-name: ghcr.io/pete-builds/open-model-arena
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-
-  bump-example-compose:
-    name: Bump docker-compose.yml example image tag
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # Need write access to push the bot commit back to main.
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Bump image tag in docker-compose.yml
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          VERSION="${REF_NAME#v}"
-          # Fetch + check out main so the bot's push has somewhere to land.
-          git fetch origin main
-          git checkout main
-          # Only rewrite the pinned image tag; leave everything else alone.
-          # Pattern matches ghcr.io/pete-builds/open-model-arena:X.Y.Z (semver only).
-          sed -i -E \
-            "s|(ghcr\.io/pete-builds/open-model-arena:)[0-9]+\.[0-9]+\.[0-9]+|\1${VERSION}|" \
-            docker-compose.yml
-          if git diff --quiet docker-compose.yml; then
-            echo "docker-compose.yml already at ${VERSION}, nothing to bump"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docker-compose.yml
-          # [skip ci] prevents the bot push from re-triggering CI.
-          git commit -m "compose: bump example image to ${VERSION} [skip ci]"
-          git push origin main
 
   github-release:
     name: Create GitHub release
