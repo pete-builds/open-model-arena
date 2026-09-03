@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-03
+
 ### Added
 
 - **Thinking selector.** The arena toolbar gained a per-battle thinking
@@ -200,5 +202,6 @@ Initial public release.
   `UPDATE ... WHERE winner IS NULL`; the ELO update and audit-log insert
   only run after a successful claim. Covered by a new concurrent test.
 
-[Unreleased]: https://github.com/pete-builds/open-model-arena/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/pete-builds/open-model-arena/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/pete-builds/open-model-arena/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/pete-builds/open-model-arena/releases/tag/v0.1.0
