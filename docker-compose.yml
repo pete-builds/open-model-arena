@@ -11,7 +11,7 @@
 
 services:
   model-arena:
-    image: ghcr.io/pete-builds/open-model-arena:0.1.0
+    image: ghcr.io/pete-builds/open-model-arena:0.2.0
     container_name: model-arena
     restart: unless-stopped
     ports:
