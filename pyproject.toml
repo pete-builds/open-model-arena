@@ -31,9 +31,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "fastapi==0.143.0",
+    "fastapi==0.144.0",
     "uvicorn[standard]==0.54.0",
-    "openai==3.29.0",
+    "openai==3.35.1",
     "aiosqlite==0.22.1",
     "pyyaml==6.0.3",
 ]
@@ -44,7 +44,7 @@ dev = [
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
     "httpx==0.28.1",
-    "ruff==0.17.0",
+    "ruff==0.17.1",
 ]
 
 [project.urls]
