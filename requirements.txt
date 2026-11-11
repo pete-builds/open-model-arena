@@ -1,6 +1,6 @@
-fastapi==0.162.0
+fastapi==0.162.2
 uvicorn[standard]==0.54.0
-openai==3.42.0
+openai==3.46.0
 aiosqlite==0.22.1
 pyyaml==6.0.3
 prometheus-client==0.26.0
@@ -10,4 +10,4 @@ pytest==9.2.0
 pytest-asyncio==1.4.1
 pytest-cov==7.1.0
 httpx==0.28.1
-ruff==0.17.3
+ruff==0.17.4
