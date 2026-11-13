@@ -320,8 +320,8 @@ export function showReveal(data) {
     $('#reveal-name-a').textContent = data.model_a_name;
     $('#reveal-name-b').textContent = data.model_b_name;
 
-    const badgeA = data.model_a_provider === 'ollama-mac' ? 'local' : 'gateway';
-    const badgeB = data.model_b_provider === 'ollama-mac' ? 'local' : 'gateway';
+    const badgeA = data.model_a_local ? 'local' : 'gateway';
+    const badgeB = data.model_b_local ? 'local' : 'gateway';
 
     const costA = data.cost_a > 0 ? `$${data.cost_a.toFixed(4)}` : 'free';
     const costB = data.cost_b > 0 ? `$${data.cost_b.toFixed(4)}` : 'free';

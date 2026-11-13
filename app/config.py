@@ -66,6 +66,11 @@ class Config:
     def get_provider(self, name: str) -> Provider:
         return self.providers[name]
 
+    def is_local_provider(self, name: str) -> bool:
+        """True when the provider is configured with ``local: true``."""
+        provider = self.providers.get(name)
+        return bool(provider and provider.local)
+
     def get_model(self, model_id: str) -> Model | None:
         for m in self.models:
             if m.id == model_id:

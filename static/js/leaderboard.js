@@ -24,7 +24,7 @@ export async function loadLeaderboard(category) {
             const rankClass = !row.provisional && row.rank <= 3 ? `rank-${row.rank}` : '';
             const provClass = row.provisional ? 'provisional' : '';
             const barWidth = ((row.rating - minElo) / (maxElo - minElo) * 100).toFixed(0);
-            const badge = row.provider === 'ollama-mac' ? 'local' : 'gateway';
+            const badge = row.local ? 'local' : 'gateway';
             const rankDisplay = row.provisional ? '~' : row.rank;
 
             return `<tr class="${rankClass} ${provClass}">
