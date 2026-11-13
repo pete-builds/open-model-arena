@@ -382,7 +382,7 @@ async def test_create_battle_explicit_models_reject_category_they_dont_support(c
 
     resp = await client.post(
         "/api/battle",
-        json={"prompt": "test", "category": "coding", "model_a": "narrow-model", "model_b": "gpt-4o"},
+        json={"prompt": "test", "category": "coding", "model_a": "narrow-model", "model_b": "gpt-6-1-sol"},
         headers=auth_headers,
     )
     assert resp.status_code == 400
@@ -407,7 +407,7 @@ async def test_create_battle_nonexistent_model(client, auth_headers):
 async def test_create_battle_specific_models(client, auth_headers):
     resp = await client.post(
         "/api/battle",
-        json={"prompt": "test", "model_a": "gpt-4o", "model_b": "gpt-4o-mini"},
+        json={"prompt": "test", "model_a": "gpt-6-1-sol", "model_b": "gpt-6-luna"},
         headers=auth_headers,
     )
     assert resp.status_code == 200
@@ -493,7 +493,7 @@ async def test_leaderboard_with_ranked_and_provisional(client, auth_headers, aut
     """After enough votes, models appear as ranked; others stay provisional."""
     # Create 6 battles directly in the store to avoid rate limiter
     for _ in range(6):
-        bid = await store.create_battle("test", "general", "gpt-4o", "gpt-4o-mini")
+        bid = await store.create_battle("test", "general", "gpt-6-1-sol", "gpt-6-luna")
         await store.update_response_a(bid, "a", 300, 50, 0.001)
         await store.update_response_b(bid, "b", 400, 60, 0.002)
         await store.record_vote(bid, "a")
@@ -510,13 +510,54 @@ async def test_leaderboard_with_ranked_and_provisional(client, auth_headers, aut
     assert ranked[0]["win_rate"] > 0
 
 
+# --- Local vs gateway badge ---
+
+
+@pytest.mark.asyncio
+async def test_leaderboard_flags_local_by_provider_config_not_name(client, auth_headers_get, monkeypatch):
+    """A provider marked `local: true` is reported local whatever it is named."""
+    from app import main
+    from app.config import Config, Model, Provider
+
+    def model(model_id, provider):
+        return Model(
+            id=model_id,
+            provider_name=provider,
+            display_name=model_id,
+            model_id=model_id,
+            input_cost_per_1m=0.0,
+            output_cost_per_1m=0.0,
+            categories=["general"],
+        )
+
+    cfg = Config(
+        providers={
+            "my-homelab-box": Provider(name="my-homelab-box", base_url="http://x/v1", api_key="k", local=True),
+            "some-cloud": Provider(name="some-cloud", base_url="http://y/v1", api_key="k"),
+        },
+        models=[model("local-one", "my-homelab-box"), model("cloud-one", "some-cloud")],
+    )
+    monkeypatch.setattr(main, "config", cfg)
+
+    bid = await main.store.create_battle("t", "general", "local-one", "cloud-one")
+    await main.store.update_response_a(bid, "a", 300, 50, 0.0)
+    await main.store.update_response_b(bid, "b", 400, 60, 0.001)
+    await main.store.record_vote(bid, "a")
+
+    resp = await client.get("/api/leaderboard", headers=auth_headers_get)
+    assert resp.status_code == 200
+    by_id = {row["model_id"]: row for row in resp.json()}
+    assert by_id["local-one"]["local"] is True
+    assert by_id["cloud-one"]["local"] is False
+
+
 # --- Export with data ---
 
 
 @pytest.mark.asyncio
 async def test_export_csv_with_data(client, auth_headers, auth_headers_get):
     """CSV export includes battle data with model names."""
-    bid = await store.create_battle("export test", "general", "gpt-4o", "gpt-4o-mini")
+    bid = await store.create_battle("export test", "general", "gpt-6-1-sol", "gpt-6-luna")
     await store.update_response_a(bid, "a", 300, 50, 0.001)
     await store.update_response_b(bid, "b", 400, 60, 0.002)
     await store.record_vote(bid, "b")

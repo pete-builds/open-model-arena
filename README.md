@@ -21,7 +21,7 @@ Two models get the same prompt. You read both responses without knowing which mo
 
 **What makes this different from public leaderboards:** those benchmarks test their models with their prompts on their hardware. They don't tell you how Mistral 7B running on your Mac Mini compares to GPT-4o for the prompts your team actually uses. Open Model Arena runs on your infrastructure, with your models, your prompts, and your data. A $0 local model and a $15/million-token cloud API get the same blind evaluation.
 
-**How is this different from Chatbot Arena?** [Chatbot Arena](https://lmarena.ai/) (LMSYS) is a research platform that published its code. Running it yourself means installing FastChat, Gradio, and a full inference serving framework. It's designed to serve models, not connect to ones you already have. Open Model Arena is a self-hosted tool designed to be deployed. One Docker container, one YAML file, no inference framework required. If your models are already running on Ollama, behind an API, or through a gateway, you're five minutes from your first blind battle.
+**How is this different from Arena?** [Arena](https://arena.ai/) (formerly Chatbot Arena and LMArena, which began at LMSYS) is a research platform that published its code. Running it yourself means installing FastChat, Gradio, and a full inference serving framework. It's designed to serve models, not connect to ones you already have. Open Model Arena is a self-hosted tool designed to be deployed. One Docker container, one YAML file, no inference framework required. If your models are already running on Ollama, behind an API, or through a gateway, you're five minutes from your first blind battle.
 
 ## Who is this for?
 
@@ -147,16 +147,22 @@ The app will refuse to start without `ARENA_PASSPHRASE` and `AUTH_TOKEN_SECRET`.
 
 ## Roadmap
 
-The next tranche of work is aimed at teams codifying real evals, not just
-running one-off battles. See [`docs/SHOWCASE-PLAN.md`](docs/SHOWCASE-PLAN.md)
-for the full plan. Headline features on deck:
+Everything below marked shipped is in [0.2.0](CHANGELOG.md). See
+[`docs/SHOWCASE-PLAN.md`](docs/SHOWCASE-PLAN.md) for the original plan.
 
-- **Eval suites** — YAML-defined prompt sets, batch runs, suite-scoped leaderboards
-- **LLM-as-judge** — auto-vote using a designated judge model with human override
-- **Cost dashboard** — spend by model, cost-per-ELO-point, cheapest-above-threshold
-- **API tokens** — headless suite runs from CI
-- **Prometheus `/metrics`** — battles, votes, latency, cost
-- **Battle permalinks** — shareable URL for team review
+**Shipped in 0.2.0**
+
+- **Eval suites**: YAML-defined prompt sets and batch runs, scored by the judge
+- **LLM-as-judge**: auto-vote using a designated judge model, with human override
+- **Cost dashboard**: spend by model and measured cost per 1k output tokens (`/api/costs`)
+- **API tokens**: headless suite runs from CI
+- **Prometheus `/api/metrics`**: battles, votes, latency, cost
+- **Battle permalinks**: shareable URL for team review
+
+**Not built yet**
+
+- Suite-scoped leaderboards (ratings are still one pool per category)
+- Cost per ELO point and "cheapest model above a rating threshold" views
 
 ## Contributing + Security
 
@@ -166,7 +172,7 @@ for the full plan. Headline features on deck:
 
 ## Prior Art
 
-Inspired by [Chatbot Arena](https://lmarena.ai/) (LMSYS), which pioneered blind model comparison at scale. Open Model Arena brings that concept to self-hosted infrastructure for teams and individuals who want to evaluate models privately.
+Inspired by [Arena](https://arena.ai/) (formerly Chatbot Arena and LMArena), which pioneered blind model comparison at scale. Open Model Arena brings that concept to self-hosted infrastructure for teams and individuals who want to evaluate models privately.
 
 ## License
 

@@ -2,6 +2,9 @@
 #
 # Copy this file to models.yaml and edit with your own providers and models.
 # Any OpenAI-compatible API endpoint works (OpenAI, Anthropic via LiteLLM, Ollama, etc.)
+#
+# Model ids below were checked against each provider's own docs on 2026-11-12.
+# Model lineups change often: confirm the ids against your provider before use.
 
 providers:
   # Example: OpenAI direct
@@ -27,13 +30,15 @@ providers:
   #   timeout: 30
 
 models:
-  # --- Cloud models (via OpenAI or gateway) ---
+  # --- Cloud models (via OpenAI) ---
+  # Ids and prices: https://developers.openai.com/api/docs/models and
+  # https://developers.openai.com/api/docs/pricing (standard tier, short context).
 
-  - id: gpt-4o
+  - id: gpt-6-1-sol
     provider: openai
-    display_name: "GPT-4o"
-    model_id: "gpt-4o"
-    input_cost_per_1m: 2.50
+    display_name: "GPT-6.1 Sol"
+    model_id: "gpt-6.1-sol"
+    input_cost_per_1m: 2.00
     output_cost_per_1m: 10.0
     categories: [general, coding, reasoning, creative]
     enabled: true
@@ -43,42 +48,64 @@ models:
     #   false      never send reasoning_effort to this model
     # reasoning: false
 
-  - id: gpt-4o-mini
+  - id: gpt-6-luna
     provider: openai
-    display_name: "GPT-4o Mini"
-    model_id: "gpt-4o-mini"
-    input_cost_per_1m: 0.15
-    output_cost_per_1m: 0.60
+    display_name: "GPT-6 Luna"
+    model_id: "gpt-6-luna"
+    input_cost_per_1m: 0.10
+    output_cost_per_1m: 0.50
     categories: [general, coding, creative]
     enabled: true
 
   # --- Local models (via Ollama) ---
+  # Tags: https://ollama.com/library/gemma4 and https://ollama.com/library/gpt-oss
+  # Pull them first, for example: ollama pull gemma4:e4b
 
-  - id: llama3-8b
+  - id: gemma4-e4b
     provider: ollama
-    display_name: "Llama 3 8B (Local)"
-    model_id: "llama3:8b"
+    display_name: "Gemma 4 E4B (Local)"
+    model_id: "gemma4:e4b"
     input_cost_per_1m: 0.0
     output_cost_per_1m: 0.0
     categories: [general, coding, reasoning]
     enabled: true
 
-  - id: mistral-7b
+  - id: gpt-oss-20b
     provider: ollama
-    display_name: "Mistral 7B (Local)"
-    model_id: "mistral:7b"
+    display_name: "gpt-oss 20B (Local)"
+    model_id: "gpt-oss:20b"
     input_cost_per_1m: 0.0
     output_cost_per_1m: 0.0
     categories: [general, creative]
     enabled: true
 
-  # --- Disabled example ---
-  # - id: claude-3-sonnet
+  # --- Anthropic via a gateway (uncomment the gateway provider above) ---
+  # Ids and prices: https://platform.claude.com/docs/en/about-claude/models/overview
+  # - id: claude-sonnet-5-5
   #   provider: gateway
-  #   display_name: "Claude 3 Sonnet"
-  #   model_id: "claude-3-sonnet-20240229"
-  #   input_cost_per_1m: 3.0
-  #   output_cost_per_1m: 15.0
+  #   display_name: "Claude Sonnet 5.5"
+  #   model_id: "claude-sonnet-5-5"
+  #   input_cost_per_1m: 2.0
+  #   output_cost_per_1m: 10.0
+  #   categories: [general, coding, reasoning, creative]
+  #   enabled: true
+  #
+  # - id: claude-haiku-5-5
+  #   provider: gateway
+  #   display_name: "Claude Haiku 5.5"
+  #   model_id: "claude-haiku-5-5"
+  #   input_cost_per_1m: 0.10     # Anthropic lists Haiku 5.5 as "from" this price
+  #   output_cost_per_1m: 0.50
+  #   categories: [general, coding, creative]
+  #   enabled: true
+  #
+  # A judge-only model: enabled: false keeps it out of battles.
+  # - id: claude-opus-5-5
+  #   provider: gateway
+  #   display_name: "Claude Opus 5.5"
+  #   model_id: "claude-opus-5-5"
+  #   input_cost_per_1m: 4.0
+  #   output_cost_per_1m: 20.0
   #   categories: [general, coding, reasoning, creative]
   #   enabled: false
 
@@ -90,11 +117,12 @@ models:
 # vote (method = "judge") in the audit log. A human vote is always still
 # available; the judge just adds a second option.
 #
-# The judge SHOULD be one of the strongest models available to you — if
-# you're using GPT-4o + Mistral 7B for battles, GPT-4o is the right judge.
+# The judge SHOULD be a strong model that is NOT one of the models in the
+# battle: a model grading its own answer is biased. Keep the judge as a
+# separate, disabled entry (like claude-opus-5-5 above) so it never competes.
 # Judge cost is tracked separately in the audit log.
 #
 # judge:
-#   model: gpt-4o        # must match an id in the models list above
-#   # rubric: |          # optional; a sane default is used when omitted
+#   model: claude-opus-5-5   # must match an id in the models list above
+#   # rubric: |              # optional; a sane default is used when omitted
 #   #   Score correctness first, then helpfulness, then clarity.

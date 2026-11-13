@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Local badge follows config, not a provider name.** The leaderboard and
+  the reveal view labelled a model "local" only when its provider was named
+  `ollama-mac`. They now use the provider's `local: true` setting, exposed as
+  `local` on `/api/leaderboard` rows and `model_a_local` / `model_b_local` on
+  the reveal payload.
+
+### Changed
+
+- `models.yaml.example` uses current model ids, and no longer suggests a
+  judge that also battles.
+- README roadmap separates what shipped in 0.2.0 from what is not built, and
+  names the comparison site Arena (arena.ai).
+
 ## [0.2.0] - 2026-09-03
 
 ### Added
